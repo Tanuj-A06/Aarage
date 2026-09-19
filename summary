@@ -1,0 +1,161 @@
+# Train Your AI Fighter & Pen Fight 3D — Repository Summary
+
+## 1. Executive Summary
+
+This repository hosts **"Train Your AI Fighter"**, an offline-first, browser-based combat simulation and Web3 game created for the Monad Hackathon. 
+
+The core premise is autonomous, prompt-driven competition: two players describe their strategy in plain English (up to 200 words). The game compiles these descriptions in real time into combat attributes (`aggression`, `defense`, `speed`), and assigns them to autonomous AI agents that battle without human intervention. The victor's fighter profile and match metadata are queued for minting as an on-chain NFT on Monad Testnet.
+
+The project features two distinct simulation modes sharing the same input and state pipeline:
+1. **AI Fighter**: A 2D martial arts arena fighting game with procedural camera perspective ([`scene3d.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/scene3d.js)) and an optional full WebGL 3D renderer ([`render3d.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/render3d.js)).
+2. **Pen Fight 3D**: A 3D simulation of the classic school desk pen duel ([`penfight.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/penfight.js), [`penfight3d.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/penfight3d.js)), driven by real rigid-body Newtonian mechanics in SI units.
+
+The entire project operates with **zero build step and zero runtime network dependencies** (no npm, no bundler, no LLM API, no audio asset files, and no CDN scripts).
+
+---
+
+## 2. Directory & File Structure
+
+```
+gamingNft/
+├── index.html                  # Single-page UI screens, HUD, canvas views, and script loading order
+├── styles.css                  # Retro arcade cabinet styling, CRT scanline overlay, animations
+├── README.md                   # Project overview, mechanics documentation, balance benchmarks
+├── LICENSE.upstream            # MIT license from upstream Fight-ME-Monk
+├── assets/
+│   ├── img/                    # 2D sprite sheets (Samurai Mack & Kenji) and arena backdrops
+│   └── models/
+│       ├── Soldier.glb         # Shipped 3D character model (Mixamo Vanguard from Three.js examples)
+│       └── CREDITS.md          # 3D asset licensing and procedural animation disclosures
+└── js/
+    ├── utils.js                # Math helpers, Mulberry32 PRNG, collision math, URL query params
+    ├── config.js               # Central balances, geometry constants, movelists, and Monad network config
+    ├── classes.js              # Sprite and Fighter classes (animation loops, hitboxes, stats)
+    ├── prompt-parser.js        # Plain-English lexer and normalizer -> {aggression, defense, speed}
+    ├── ai-controller.js        # 3-tier autonomous agent (Plan, Utility AI, Reflex) + Opponent Model
+    ├── fx.js                   # Web Audio API sound synthesis and procedural canvas visual effects
+    ├── scene3d.js              # Perspective camera, vanishing point, and crowd projection for 2D arena
+    ├── game.js                 # 2D game loop, hit resolution, damage scaling, headless balance runner
+    ├── blockchain.js           # Simulated Monad minting flow (ready for live contract binding)
+    ├── penfight.js             # Pen Fight rigid-body physics simulation and desk AI
+    ├── penfight3d.js           # Three.js WebGL renderer for Pen Fight (procedural wood, lamp lighting)
+    ├── render3d.js             # Three.js WebGL renderer for AI Fighter (procedural skeletal animation)
+    ├── ui.js                   # State machine (Title -> Prompt -> Analyze -> Reveal -> Fight -> Winner -> Mint)
+    └── vendor/
+        ├── gsap.min.js         # GreenSock Animation Platform (local offline bundle)
+        ├── three.min.js        # Three.js WebGL library
+        ├── GLTFLoader.js       # Three.js GLTF asset loader
+        ├── EffectComposer.js   # Three.js post-processing composer
+        ├── RenderPass.js       # Post-processing render pass
+        ├── ShaderPass.js       # Post-processing custom shader pass
+        ├── MaskPass.js         # Post-processing mask pass
+        ├── CopyShader.js       # Shaders for buffer blitting
+        ├── LuminosityHighPassShader.js # Luminosity extraction for bloom
+        └── UnrealBloomPass.js  # Bloom glow post-processing pass
+```
+
+---
+
+## 3. Core Systems Architecture
+
+### 3.1. Natural Language Prompt Parsing ([`prompt-parser.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/prompt-parser.js))
+* **Zero Latency / Offline**: Avoids LLMs to prevent network latency, API costs, or offline failures during live demos. Operates in sub-millisecond execution time, enabling real-time feedback as the player types.
+* **Lexicon & Compound Logic**: Scans ~220 keywords mapped to `aggression`, `defense`, and `speed`. Analyzes context modifiers:
+  * **Intensifiers** (`very`, `always`, `ultra` -> 1.35x–1.7x multiplier).
+  * **Diminishers** (`slightly`, `sometimes` -> 0.6x–0.85x multiplier).
+  * **Negations** (`never`, `don't`, `without` -> reverses sign, so "never retreat" increases aggression).
+  * **Compound Idioms** (e.g., "hit and run", "glass cannon", "stand your ground", "coward").
+* **Stat Budgeting**: Forces the sum of stats to normalize within `[0.95, 1.95]`. This prevents "keyword stuffing" from creating universally overpowered fighters and enforces strategic tradeoffs.
+* **Hashing Fallback**: If an unrecognized prompt is supplied (e.g., "banana pancakes"), it hashes the string via [`mulberry32`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/utils.js#L14) into unique, valid stats marked as "improvising".
+* **Archetype Assignment**: Classifies stats into archetypes: `GLASS CANNON`, `BERSERKER`, `JUGGERNAUT`, `TURTLE`, `ASSASSIN`, `BRAWLER`, `TACTICIAN`, or `JOURNEYMAN`.
+
+### 3.2. Three-Tier Agent AI ([`ai-controller.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/ai-controller.js))
+* **Tier 1: Plan Tier** (Slow loop, every 1–2s or on major events):
+  * Selects a high-level game plan: `RUSH`, `ZONE`, `BAIT`, `HUNT`, or `TURTLE`.
+  * Adjusts optimal engagement range and modifies utility weightings.
+* **Tier 2: Utility Tier (IAUS)** (Evaluated every 6–14 frames based on speed):
+  * Scores candidate actions (`ADVANCE`, `RETREAT`, `COMMIT`, `DODGE`, `HOP`, `BLOCK`) against continuous considerations: distance error, move cooldowns, health deltas, opponent states, and plan biases.
+  * Picks actions via weighted random distribution across positive scores, eliminating repetitive or robotic patterns.
+* **Tier 3: Reflex Tier** (Every frame at 60Hz):
+  * Handles immediate priority checks: stun lockout, attack startup commitment, reaction dodging to enemy windups, whiff punish executions, and guard breaking.
+* **Opponent Modeling**: Tracks exponential moving averages of opponent behavior (jump frequency, attack rate, whiff rate). If an opponent whiffs often, the AI increases the weight of `HUNT` (whiff-punishing).
+* **Virtual Keyboard Interface**: AI commands write directly into the standard `keys` state object, ensuring standard engine compatibility and enabling manual player control via URL debug flags (`?human=1`).
+
+### 3.3. Combat Engine & Game Balance ([`game.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/game.js), [`config.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/config.js))
+* **Combat Triangle**:
+  * **Block** counters **Jab** and **Normal** (reduces damage to chip level, stuns minimally, pushes attacker back).
+  * **Heavy** counters **Block** (triggers **Guard Break**, dealing 60% damage and inducing the longest stun window in the game: 28 frames).
+  * **Punish** counters **Heavy** (whiffing a heavy leaves a 34-frame vulnerability window).
+* **Symmetry & Balance**:
+  * Shared hit timing: damage resolves at strict frame marks (`jab`: 7, `normal`: 11, `heavy`: 17) regardless of sprite sheet animation differences.
+  * Separation assurance: [`resolveSeparation()`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/game.js#L221-L240) maintains a strict 70px minimum boundary to prevent character cross-over (since sprites lack mirrored assets).
+  * Strike reach is bounded between 70px and 220px. Max kiting distance is set to 252px, ensuring defensive fighters can genuinely step out of reach to bait whiffs.
+* **Pacing & Anti-Stall Mechanisms**:
+  * **Pressure Ramp**: Between 7s and 18s, retreats decay, aggression climbs, cooldowns decrease, and damage scales up by +15%.
+  * **Sudden Death**: At 20s, retreats are disabled and damage scales by 2.2x to guarantee a decisive finish before the 25s buzzer.
+  * **Rage & Last Stand**: Fighters below 45% HP gain up to +38% damage and faster cooldowns. Seed-determined "Last Stand" grants a one-time survival at 4 HP from a lethal hit.
+
+### 3.4. Mode 2: Pen Fight 3D ([`penfight.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/penfight.js), [`penfight3d.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/penfight3d.js))
+* **Deterministic Rigid-Body Physics**:
+  * Simulated in SI units (14.5 cm length, 12 g mass, Coulomb kinetic friction $\mu = 2.3$, angular friction $\text{SPIN\_MU} = 9.0$, coefficient of restitution $e = 0.50$).
+  * Capsule collision detection with true closest points, normal impulse, clamped tangential friction impulse, and torque calculations based on realistic center-of-mass offset (toward the cap).
+  * Moves: `tap`, `drive`, and `smash`. Striking an opponent transfers velocity; whiffing a maximum-power smash overextends past the desk edge.
+* **Spatial Pressure Ramp**:
+  * Desk half-extents shrink gradually starting at 8 seconds, forcing pens toward the perimeter and preventing passive stalling.
+* **Procedural 3D Presentation**:
+  * Three.js scene featuring procedurally generated wood albedo, roughness, and Sobel-derived normal maps.
+  * Single 2800K hanging spot lamp with dust motes and contact shadows.
+
+### 3.5. Procedural Audio & Visual FX ([`fx.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/fx.js))
+* **Zero Audio Files**: 100% synthesized in real time via the Web Audio API. Generates chiptune arcade background music, blade slashes, heavy impact thuds, metallic guard clinks, crowd cheers, referee bells, and countdown beeps.
+* **Visual Effects**: Hitstop frame freezing (4–6 frames), dynamic screen shake, chromatic camera punch, directional particle sparks, dust puffs, expanding shockwave rings, and floating damage indicators.
+* **Silhouette Baking**: Uses pre-rendered canvas silhouette composites (`source-in`) for colored auras and hit flashes, avoiding slow runtime CSS filters.
+
+### 3.6. UI & Screen Lifecycle ([`ui.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/ui.js))
+* Manages the arcade flow:
+  1. **Title Screen (`#screen-title`)**: Live attract mode with animated characters and game mode toggle (`AI Fighter` vs `Pen Fight 3D`).
+  2. **Prompt Entry (`#screen-prompt`)**: Live character word counter, stat bar rendering, keyword chips, and presets.
+  3. **Analysis Phase (`#screen-analyze`)**: Paced theatrical terminal log.
+  4. **Fighter Reveal (`#screen-reveal`)**: Card presentations displaying archetypes, stats, and quotes.
+  5. **HUD & Battle (`#hud`)**: Real-time dual health meters with trailing ghost chips, round timer, and combat announcements.
+  6. **Winner Display (`#screen-winner`)**: Outcome announcement, final stats, and action buttons.
+  7. **NFT Minting (`#screen-mint`)**: Step-by-step transaction logs.
+
+### 3.7. Blockchain Integration ([`blockchain.js`](file:///C:/Users/Tanuj/Documents/Git-repos/gamingNft/js/blockchain.js))
+* Configured for **Monad Testnet** (Chain ID `10143`, RPC `https://testnet-rpc.monad.xyz`).
+* Provides a complete simulated transaction flow with realistic step delays and explicit `SIMULATED` badging.
+* Encapsulates the entire contract interface in a clean data structure (`UI.pendingMint`) capturing prompt, stats, archetype, win status, remaining HP, fight duration, game mode, finish type, seed, and timestamp.
+
+---
+
+## 4. URL Parameters & Headless Tools
+
+The engine exposes URL query parameters for debugging, deterministic replay, and headless balance analysis:
+
+| Parameter | Function |
+|---|---|
+| `?p1=...&p2=...` | Pre-populates prompt inputs for Player 1 and Player 2. |
+| `&auto=1` | Skips prompt entry directly into analysis and battle. |
+| `?seed=N` | Replays an exact fight using a 32-bit deterministic Mulberry32 seed. |
+| `?bench=200` | Headlessly runs $N$ battles across all archetype matchups and outputs a balance table to `console.table`. |
+| `?penbench=200` | Headlessly runs $N$ rounds of Pen Fight 3D across matchups. |
+| `?human=1` | Enables direct keyboard control for Player 1 (`A`/`D` to move, `W` to jump, `Space` to attack). |
+| `?hitboxes=1` | Renders green hurtboxes and red attack collision boxes. |
+| `?flat=1` | Disables pseudo-3D perspective camera, reverting to classic flat 2D canvas view. |
+| `?mode=pen` | Boots directly into Pen Fight mode. |
+
+---
+
+## 5. Execution Instructions
+
+The project requires no build tools, compilers, or external package managers.
+
+To launch locally:
+```bash
+# Start a local HTTP server in the repository root
+python -m http.server 8080
+
+# Navigate in any modern WebGL-compatible browser
+http://localhost:8080
+```
+*(Running through an HTTP server rather than opening `index.html` as a `file://` URI is necessary to prevent browser security restrictions with WebGL shaders and Web3 wallet extensions).*

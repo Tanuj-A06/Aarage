@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+contracts/node_modules/
+
+# Hardhat build artifacts
+contracts/artifacts/
+contracts/cache/
+
+# Environment variables & secrets
+.env
+contracts/.env
+
+# OS / Editor files
+.DS_Store
+Thumbs.db
+*.log

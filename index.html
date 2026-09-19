@@ -1,0 +1,477 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>AARAGE</title>
+<meta name="description" content="AARAGE is a prompt-driven AI fighting arcade. Write a strategy in plain English, watch it fight, mint the winner on Monad." />
+<meta name="theme-color" content="#05060a" />
+
+<meta property="og:title" content="AARAGE" />
+<meta property="og:description" content="Write a sentence. Watch it fight." />
+<meta property="og:type" content="website" />
+
+<link rel="icon" href="assets/favicon.svg" type="image/svg+xml" />
+
+<link rel="preconnect" href="https://fonts.googleapis.com" />
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+<!-- Archivo Black is the wordmark only. Everything below the hero is set in
+     Barlow Condensed, which is what carries the editorial look. -->
+<link href="https://fonts.googleapis.com/css2?family=Archivo+Black&family=Barlow+Condensed:wght@600;700;800&family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet" />
+
+<link rel="stylesheet" href="site.css?v=7" />
+</head>
+<body>
+
+<!-- ============ FIXED BACKDROP ============
+     Both clips are fixed and full-bleed. They are only ever seen through the
+     hero: every band below it paints an opaque background straight over them,
+     which is what lets the page turn light without the video showing through.
+     The courtyard sits behind everything; the character stands in front of it,
+     right-anchored. -->
+<div class="backdrop" aria-hidden="true">
+  <video class="bd-scene" autoplay loop muted playsinline
+         poster="assets/video/courtyard-poster.jpg">
+    <source src="assets/video/courtyard.mp4" type="video/mp4" />
+  </video>
+  <div class="bd-scrim"></div>
+  <!-- A pool of darkness under the character. She is composited with
+       mix-blend-mode: screen, which drops her black background out for
+       free - but screen also lets anything bright behind her show through
+       her near-black coat. This keeps her half of the frame dark enough
+       that she stays solid. -->
+  <div class="bd-pool"></div>
+  <div class="bd-vignette"></div>
+</div>
+
+<video id="hero-girl" autoplay loop muted playsinline
+       poster="assets/video/girl-poster.jpg" aria-hidden="true">
+  <source src="assets/video/girl.mp4" type="video/mp4" />
+</video>
+
+<div class="grain" aria-hidden="true"></div>
+<div class="scanlines" aria-hidden="true"></div>
+<div class="progress" aria-hidden="true"><i id="progress-bar"></i></div>
+
+<a class="skip" href="#parser">Skip to the parser</a>
+
+<!-- ============ NAV ============ -->
+<header class="nav" id="nav">
+  <a class="brand" href="#top" aria-label="AARAGE - home">
+    <span class="brand-mark" aria-hidden="true"></span>
+    <span class="brand-name">AARAGE</span>
+  </a>
+
+  <nav class="nav-links" aria-label="Sections">
+    <a href="#parser">Parser</a>
+    <a href="#roster">Roster</a>
+    <a href="#system">System</a>
+    <a href="#spectate">Spectate</a>
+    <a href="#cabinet">Cabinet</a>
+    <a href="#chain">Chain</a>
+  </nav>
+
+  <a class="btn btn-gold nav-cta" href="play.html">Insert coin</a>
+
+  <button class="nav-burger" id="nav-burger" type="button" aria-label="Menu"
+          aria-expanded="false" aria-controls="nav-menu">
+    <i aria-hidden="true"></i><i aria-hidden="true"></i>
+  </button>
+</header>
+
+<!-- Mobile only: the links have nowhere to live in a 360px bar. -->
+<div class="nav-menu" id="nav-menu" hidden>
+  <a href="#parser">Parser</a>
+  <a href="#roster">Roster</a>
+  <a href="#system">System</a>
+  <a href="#spectate">Spectate</a>
+  <a href="#cabinet">Cabinet</a>
+  <a href="#chain">Chain</a>
+  <a class="btn btn-gold" href="play.html">Insert coin</a>
+</div>
+
+<main id="top">
+
+  <!-- ============ HERO ============
+       Unchanged: the name, one button, and the spec plate along the bottom.
+       The courtyard, the character and the grain do the rest. -->
+  <section class="hero" aria-label="AARAGE">
+    <div class="hero-inner">
+      <h1 class="wordmark" id="wordmark"><span
+        aria-hidden="true">A</span><span
+        aria-hidden="true">A</span><span
+        aria-hidden="true">R</span><span
+        aria-hidden="true">A</span><span
+        aria-hidden="true">G</span><span
+        aria-hidden="true">E</span><span class="sr-only">AARAGE</span></h1>
+
+      <!-- One word and one button. No blurb, no second CTA: the page starts
+           explaining itself at section 01 and the nav is right there. -->
+      <div class="hero-cta">
+        <a class="btn btn-gold btn-lg" href="play.html">Insert coin</a>
+      </div>
+    </div>
+
+    <!-- The strip along the bottom of a cabinet: four numbers that describe
+         the machine, rather than four benefits that describe nothing. -->
+    <dl class="hero-spec">
+      <div><dt>Prompt window</dt><dd>60<i>s</i></dd></div>
+      <div><dt>Round length</dt><dd>25<i>s</i></dd></div>
+      <div><dt>Archetypes</dt><dd>8</dd></div>
+      <div><dt>Inputs after the bell</dt><dd>0</dd></div>
+    </dl>
+  </section>
+
+  <!-- ============ ROSTER MARQUEE ============
+       The strip that seals the bottom of the hero. Filled from the real
+       archetype table, so it cannot drift from what the parser can produce. -->
+  <div class="marquee" aria-hidden="true">
+    <div class="marquee-run" id="marquee-run"></div>
+  </div>
+
+  <!-- ============ 01 - THE PARSER ============ -->
+  <section class="band band-light" id="parser">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>01</i>The parser</span>
+        <h2>Your sentence,<br />turned into stats.</h2>
+        <p class="sec-note">This box runs the game's own
+          <code>parsePrompt()</code>, loaded off
+          <code>js/prompt-parser.js</code>. Nothing here is mocked up. Whatever
+          you type is the fighter you would get in a real match.</p>
+      </header>
+
+      <div class="pd reveal">
+        <!-- left: the input -->
+        <div class="pd-in panel">
+          <div class="panel-bar">
+            <span>strategy.txt</span>
+            <span id="pd-count">0 / 200 words</span>
+          </div>
+          <label class="sr-only" for="pd-text">Your fighter's strategy</label>
+          <textarea id="pd-text" rows="4" spellcheck="false" autocomplete="off"
+            placeholder="patient counter-puncher, stay out of range, punish mistakes"></textarea>
+          <div class="pd-presets" id="pd-presets"></div>
+        </div>
+
+        <!-- right: what the game makes of it -->
+        <div class="pd-out panel">
+          <div class="panel-bar">
+            <span>fighter</span>
+            <span id="pd-src">standby</span>
+          </div>
+
+          <div class="pd-arch">
+            <b id="pd-arch">&mdash;</b>
+            <span id="pd-tag">Waiting for a sentence.</span>
+          </div>
+
+          <div class="pd-bars" id="pd-bars"></div>
+
+          <div class="pd-hits" id="pd-hits"></div>
+
+          <!-- The payoff: your words become four of the numbers the fight
+               simulation reads on every frame. -->
+          <dl class="pd-derived" id="pd-derived">
+            <div><dt>Move speed</dt><dd><b>&mdash;</b><i>px/f</i></dd></div>
+            <div><dt>Standoff</dt><dd><b>&mdash;</b><i>px</i></dd></div>
+            <div><dt>Blocks</dt><dd><b>&mdash;</b><i>%</i></dd></div>
+            <div><dt>Reaction</dt><dd><b>&mdash;</b><i>frames</i></dd></div>
+          </dl>
+        </div>
+      </div>
+
+      <p class="pd-foot reveal">Type something the lexicon has never heard of
+        and it builds a fighter out of a hash of your text instead, so
+        <code>banana pancakes</code> is a real opponent. You get the same one
+        back every time.</p>
+    </div>
+  </section>
+
+  <!-- ============ 02 - THE ROSTER ============ -->
+  <section class="band band-dark" id="roster">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>02</i>The roster</span>
+        <h2>Eight archetypes.<br />No select screen.</h2>
+        <p class="sec-note">You write a prompt, and this table decides which
+          archetype it matched. It checks top to bottom and stops at the first
+          hit, so the specialists get asked before the all-rounders.</p>
+      </header>
+
+      <div class="rost reveal">
+        <ul class="rost-grid" id="rost-grid" aria-label="Archetypes"></ul>
+
+        <aside class="rost-detail panel" id="rost-detail">
+          <div class="panel-bar"><span id="rd-index">&mdash;</span><span>archetype</span></div>
+          <h3 id="rd-name">&mdash;</h3>
+          <p class="rd-tag" id="rd-tag"></p>
+          <div class="rd-row">
+            <span>Matches when</span>
+            <code id="rd-cond">&mdash;</code>
+          </div>
+          <div class="rd-row">
+            <span>A prompt that lands here</span>
+            <q id="rd-sample"></q>
+          </div>
+          <!-- Every sample below was run through the real parser and checked
+               against the archetype it claims. See site.js. -->
+          <button class="btn btn-ghost btn-sm" id="rd-run" type="button">
+            Run it through the parser
+          </button>
+        </aside>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 03 - THE SYSTEM ============ -->
+  <section class="band band-light alt" id="system">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>03</i>The system</span>
+        <h2>Three attacks.<br />One triangle.</h2>
+        <p class="sec-note">Both fighters share every number on this page.
+          Neither sprite gets its own timings, so the only thing separating two
+          fighters is the prompt behind them.</p>
+      </header>
+
+      <div class="sys">
+        <!-- movelist, straight off CONFIG.MOVES -->
+        <div class="sys-moves panel reveal">
+          <div class="panel-bar"><span>movelist</span><span>frames &amp; multipliers</span></div>
+          <table class="movetable">
+            <thead>
+              <tr>
+                <th scope="col">Move</th>
+                <th scope="col">Startup</th>
+                <th scope="col">Damage</th>
+                <th scope="col">Cooldown</th>
+                <th scope="col">Whiff</th>
+              </tr>
+            </thead>
+            <tbody id="move-rows"></tbody>
+          </table>
+          <p class="cap">Startup is also the telegraph. A defender who reacts
+            inside that window gets out of the way. Whiff is how long you are
+            stuck there after missing.</p>
+        </div>
+
+        <!-- the triangle -->
+        <div class="sys-tri panel reveal">
+          <div class="panel-bar"><span>the triangle</span><span>no free corner</span></div>
+          <ol class="tri">
+            <li><b>Block</b><em>beats</em><span>jab &amp; normal</span>
+              <small>16% chip gets through and the attacker is shoved 9px off.</small></li>
+            <li><b>Heavy</b><em>breaks</em><span>block</span>
+              <small>60% damage through the guard, then 28 frames of stun.</small></li>
+            <li><b>Punish</b><em>beats</em><span>heavy</span>
+              <small>34 frames of whiff recovery, the widest window in the game.</small></li>
+          </ol>
+          <p class="cap">You can't sit in block. It runs out after 30 frames,
+            has a 24-frame cooldown, and chip damage keeps landing. A fighter
+            who only blocks loses anyway, just slowly.</p>
+        </div>
+
+        <!-- the clock -->
+        <div class="sys-clock panel reveal">
+          <div class="panel-bar"><span>the clock</span><span>25 seconds, no draws</span></div>
+          <ol class="clockline">
+            <li style="--at:0"><b>0s</b><span>Bell</span></li>
+            <li style="--at:28"><b>7s</b><span>Pressure opens</span></li>
+            <li style="--at:72"><b>18s</b><span>Full pressure</span></li>
+            <li style="--at:80"><b>20s</b><span>Sudden death</span></li>
+            <li style="--at:100"><b>25s</b><span>Hard stop</span></li>
+          </ol>
+          <p class="cap">Across 1,250 recorded fights the longest round was
+            24.2s and the median was 18.3s. Two passive prompts still finish.</p>
+        </div>
+
+        <!-- drama rules -->
+        <div class="sys-drama panel reveal">
+          <div class="panel-bar"><span>comeback rules</span><span>why fights stay close</span></div>
+          <dl class="drama">
+            <div><dt>Rage</dt><dd>Under 45% health you hit up to 38% harder, swing 18% sooner and move 16% faster.</dd></div>
+            <div><dt>Last stand</dt><dd>A killing blow taken from full health leaves you on 4&nbsp;HP instead. Once per fighter, and it only fires 40% of the time.</dd></div>
+            <div><dt>Seed</dt><dd>One 32-bit number drives every roll in the round. Same seed, same fight.</dd></div>
+          </dl>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ SPECTATE ============
+       Sits after 03 and outside the numbered sequence on purpose: 01-05
+       explain how the machine works, and this is the one band that is not an
+       explanation at all. It is a live read of what is happening on the
+       server right now, and it changes while you look at it.
+
+       Placed here because by this point the reader knows what a prompt does,
+       what the archetypes are and how a round is scored - which is exactly
+       what they need before a board of live matches means anything. Above
+       section 01 it was a list of strangers' archetypes with nothing to
+       hang them on.
+
+       Deliberately honest when empty. A board with nothing on it says so and
+       points at the cabinet, rather than showing invented matches to look
+       busy - the whole value of this band is that everything on it is real.
+  -->
+  <section class="band band-light" id="spectate">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>Live</i>The floor</span>
+        <h2>Watch a fight<br />you are not in.</h2>
+        <p class="sec-note">Every room on this server shows up here the moment
+          it has a code. Pick one, watch both strategies come out of
+          commit&#8209;reveal, and put <code>MON</code> behind a fighter &mdash;
+          a pari&#8209;mutuel pool on <code>ArenaBattle</code>, settled the
+          second the match does.</p>
+      </header>
+
+      <div class="spectate-band reveal">
+        <!-- left: the live board, filled by site.js from /api/match/list -->
+        <div class="sb-board panel">
+          <div class="panel-bar">
+            <span>On the floor now</span>
+            <span id="sb-tick">checking&hellip;</span>
+          </div>
+          <div id="sb-list" class="sb-list"></div>
+          <p class="sb-empty" id="sb-empty">
+            Nothing running this second. Rooms appear here live &mdash;
+            <a href="play.html">open the cabinet</a> and create one, or
+            <a href="spectate.html">watch the floor</a> and wait for a fight.
+          </p>
+        </div>
+
+        <!-- right: what a bet actually is -->
+        <div class="sb-rules panel">
+          <div class="panel-bar"><span>What a bet pays</span><span>ArenaBattle.sol</span></div>
+          <dl class="sb-math">
+            <div>
+              <dt>Back the winner</dt>
+              <dd>Your stake back <b>in full</b>, plus your share of the losing
+                pool. The principal is protected by the contract &mdash; a
+                winning bet cannot return less than it cost.</dd>
+            </div>
+            <div>
+              <dt>The split</dt>
+              <dd><b>95%</b> of the losing pool goes to the winning side, in
+                proportion to each bet. The other <b>5%</b> is the protocol
+                fee, taken from the losing pool only.</dd>
+            </div>
+            <div>
+              <dt>The fighters</dt>
+              <dd>Winner takes <b>1.5&times;</b> their stake, loser gets
+                <b>half</b> of theirs back, and the winning prompt is minted
+                as a fully on&#8209;chain SVG. Neither may bet on themselves.</dd>
+            </div>
+          </dl>
+          <a class="btn btn-gold sb-cta" href="spectate.html">Open the floor</a>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 04 - THE CABINET ============ -->
+  <section class="band band-dark" id="cabinet">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>04</i>The cabinet</span>
+        <h2>Three machines.</h2>
+        <p class="sec-note">Two of them play themselves once the bell goes. The
+          third is the one you actually drive, for the minute between
+          bouts.</p>
+      </header>
+
+      <div class="cab">
+        <a class="cab-hero reveal" href="play.html?mode=fighter">
+          <div class="cab-art art-fighter" aria-hidden="true"><i></i><i></i></div>
+          <div class="cab-body">
+            <div class="cab-meta"><span class="cab-tag">Agent vs agent</span><span>2D &amp; 3D</span></div>
+            <h3>AI Fighter</h3>
+            <p>An arena brawl between two prompts. One simulation with two
+              renderers behind it: switch views mid-bout and the same fight
+              keeps playing in 3D, frame for frame.</p>
+            <span class="cab-go">Play <b aria-hidden="true">&rarr;</b></span>
+          </div>
+        </a>
+
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ 05 - ON-CHAIN ============ -->
+  <section class="band band-light" id="chain">
+    <div class="wrap">
+      <header class="sec-head reveal">
+        <span class="eyebrow"><i>05</i>On-chain</span>
+        <h2>Winners go<br />on-chain.</h2>
+        <p class="sec-note">A fight comes down to two prompts and a seed. That
+          is small enough to store, and it means anyone holding those three
+          values can re-run the bout and get the same ending.</p>
+      </header>
+
+      <div class="chain-grid">
+        <div class="chain-copy reveal">
+          <p>
+            So the winner mints on <b>Monad</b> with all three recorded on the
+            token, plus the stats and how the round finished. Re-run it with
+            the same seed a year later and it ends the same way.
+          </p>
+          <a class="btn btn-gold" href="play.html">Mint a fighter</a>
+        </div>
+
+        <div class="receipt reveal">
+          <div class="r-head">
+            <span>Fighter record</span>
+            <b>MONAD</b>
+          </div>
+          <!-- Archetype and stats are what the real parser returns for this
+               prompt (99/15/41 lands on GLASS CANNON, not BERSERKER - AGG >= 65
+               with DEF <= 35 is checked first). Section 02 is on the same page,
+               so this row has to agree with it. -->
+          <div class="r-row"><span>Archetype</span><code>GLASS CANNON</code></div>
+          <div class="r-row"><span>Prompt</span><code>&ldquo;relentless, never back down&rdquo;</code></div>
+          <div class="r-row"><span>Agg / Def / Spd</span><code>99 / 15 / 41</code></div>
+          <div class="r-row"><span>Seed</span><code>2214897361</code></div>
+          <div class="r-row"><span>Result</span><code class="win">K.O. &mdash; 0:21</code></div>
+          <div class="r-foot">
+            <span class="r-dot" aria-hidden="true"></span> Same seed, same fight
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- ============ CLOSER ============ -->
+  <section class="band band-dark closer">
+    <div class="wrap reveal">
+      <p class="closer-k">60 seconds on the clock</p>
+      <h2 class="closer-h">Your move.</h2>
+      <a class="btn btn-gold btn-lg" href="play.html">Insert coin</a>
+    </div>
+  </section>
+
+</main>
+
+<footer class="foot">
+  <div class="wrap foot-grid">
+    <div class="foot-brand">
+      <span class="brand-mark" aria-hidden="true"></span> AARAGE
+    </div>
+    <nav class="foot-links" aria-label="Games">
+      <a href="play.html?mode=fighter">AI Fighter</a>
+      <a href="spectate.html">Spectate &amp; bet</a>
+    </nav>
+    <div class="foot-note">Built on Monad</div>
+  </div>
+</footer>
+
+<!-- The parser demo runs the cabinet's own code rather than a copy of it, so
+     the landing page cannot quietly disagree with the game. Load order is the
+     same as play.html: utils, then config, then the parser. -->
+<script src="js/utils.js?v=7"></script>
+<script src="js/config.js?v=7"></script>
+<script src="js/prompt-parser.js?v=7"></script>
+<script src="site.js?v=7"></script>
+</body>
+</html>

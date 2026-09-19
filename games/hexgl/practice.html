@@ -1,0 +1,426 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>HexGL - Practice Run</title>
+<meta name="viewport" content="width=device-width, user-scalable=no, minimum-scale=1.0, maximum-scale=1.0">
+<!-- HexGL's own index.html pulls Google Analytics and a remote favicon.
+     Neither is loaded here: this page runs inside the hub, offline, off a
+     plain python -m http.server. -->
+<link rel="stylesheet" href="css/fonts.css" type="text/css">
+<style>
+  html, body { padding: 0; margin: 0; background: #05060a; overflow: hidden; }
+  canvas { pointer-events: none; width: 100%; }
+  #overlay { position: absolute; z-index: 40; top: 0; left: 0; width: 100%; }
+
+  /* Everything below is the practice shell, not HexGL. It borrows the hub's
+     palette so the iframe does not read as a different website. */
+  :root {
+    --gold: #ffd24a;
+    --p1: #ff3b6b;
+    --dim: #7c8496;
+    --mono: Consolas, "SF Mono", Menlo, "DejaVu Sans Mono", "Courier New", monospace;
+  }
+  .pane {
+    position: absolute; inset: 0; z-index: 100;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: #05060a; color: #fff;
+    font-family: var(--mono); text-transform: uppercase; text-align: center;
+  }
+  .pane.hidden { display: none; }
+
+  #loading .lbl { font-size: 11px; letter-spacing: 0.3em; color: var(--dim); margin-bottom: 14px; }
+  #bar { width: 280px; height: 6px; background: #151a26; border: 2px solid #293143; }
+  #barfill { height: 100%; width: 0%; background: var(--gold); transition: width .2s; }
+
+  /* Target banner - the one thing that makes this a practice run rather than
+     a free drive. Top-centre, clear of the HUD's corners. */
+  #target {
+    position: absolute; z-index: 50; top: 12px; left: 50%; transform: translateX(-50%);
+    font-family: var(--mono); text-transform: uppercase; text-align: center;
+    background: rgba(5, 6, 10, 0.72); border: 2px solid #293143;
+    padding: 7px 18px; color: var(--dim); font-size: 10px; letter-spacing: 0.22em;
+    pointer-events: none;
+  }
+  #target b { color: var(--gold); font-size: 15px; letter-spacing: 0.08em; display: block; margin-top: 3px; }
+  #target.hidden { display: none; }
+  #delta { font-size: 13px; letter-spacing: 0.08em; margin-top: 4px; display: block; }
+  #delta.up { color: var(--p1); }
+  #delta.down { color: #49e07a; }
+
+  #result .verdict { font-size: 40px; letter-spacing: 0.1em; margin-bottom: 4px; }
+  #result .verdict.pass { color: #49e07a; text-shadow: 0 0 28px rgba(73, 224, 122, .45); }
+  #result .verdict.fail { color: var(--p1); text-shadow: 0 0 28px rgba(255, 59, 107, .45); }
+  #result .time { font-size: 30px; color: #fff; letter-spacing: 0.06em; margin: 10px 0 2px; }
+  #result .vs { font-size: 10px; color: var(--dim); letter-spacing: 0.22em; }
+  #result .laps { font-size: 10px; color: #5b6478; letter-spacing: 0.2em; margin-top: 14px; }
+  #result .coach {
+    font-size: 11px; color: #9aa3b5; letter-spacing: 0.08em; text-transform: none;
+    margin-top: 18px; max-width: 460px; line-height: 1.7;
+    border-top: 2px solid #1c2230; padding-top: 14px;
+  }
+  #result .coach b { color: var(--gold); }
+
+  /* Build tag, bottom-left - clear of HexGL's own speed and shield gauges,
+     which own the bottom centre and the two top corners. */
+  #build {
+    position: absolute; z-index: 50; left: 14px; bottom: 14px;
+    font-family: var(--mono); text-transform: uppercase;
+    background: rgba(5, 6, 10, 0.72); border: 2px solid #293143;
+    padding: 7px 12px; pointer-events: none;
+  }
+  #build.hidden { display: none; }
+  #build b { color: var(--gold); font-size: 12px; letter-spacing: 0.16em; display: block; }
+  #build span { color: var(--dim); font-size: 9px; letter-spacing: 0.18em; display: block; margin-top: 4px; }
+  .btnrow { margin-top: 26px; display: flex; gap: 12px; }
+  .pbtn {
+    font-family: var(--mono); text-transform: uppercase; letter-spacing: 0.16em;
+    font-size: 11px; padding: 11px 20px; cursor: pointer;
+    background: #0b0e16; border: 3px solid #293143; color: var(--dim);
+    transition: border-color .12s, color .12s, transform .08s;
+  }
+  .pbtn:hover { border-color: var(--gold); color: #fff; transform: translateY(-2px); }
+</style>
+</head>
+<body>
+
+<div id="overlay"></div>
+<div id="main"></div>
+
+<div id="target" class="hidden">
+  Beat<b id="target-val">--</b><span id="delta"></span>
+</div>
+
+<!-- What the prompt built, kept on screen for the whole run. The player is
+     here to learn which words produce which ship, and that connection is
+     much easier to make while the ship is under them than afterwards. -->
+<div id="build" class="hidden">
+  <b id="build-name">--</b><span id="build-spec"></span>
+</div>
+
+<div class="pane" id="loading">
+  <div class="lbl">Loading practice track</div>
+  <div id="bar"><div id="barfill"></div></div>
+</div>
+
+<div class="pane hidden" id="result">
+  <div class="verdict" id="verdict">FINISH</div>
+  <div class="time" id="res-time">--</div>
+  <div class="vs" id="res-vs"></div>
+  <div class="laps" id="res-laps"></div>
+  <!-- The point of the whole mode: the run read back as a verdict on the
+       sentence, with the one edit most likely to fix it. -->
+  <div class="coach" id="res-coach"></div>
+  <div class="btnrow">
+    <button class="pbtn" id="btn-retry">RUN AGAIN</button>
+    <button class="pbtn" id="btn-exit">BACK TO HUB</button>
+  </div>
+</div>
+
+<script src="libs/Three.dev.js"></script>
+<script src="libs/ShaderExtras.js"></script>
+<script src="libs/postprocessing/EffectComposer.js"></script>
+<script src="libs/postprocessing/RenderPass.js"></script>
+<script src="libs/postprocessing/BloomPass.js"></script>
+<script src="libs/postprocessing/ShaderPass.js"></script>
+<script src="libs/postprocessing/MaskPass.js"></script>
+<script src="libs/Detector.js"></script>
+<script src="libs/Stats.js"></script>
+<script src="libs/DAT.GUI.min.js"></script>
+
+<script src="bkcore.coffee/controllers/TouchController.js"></script>
+<script src="bkcore.coffee/controllers/OrientationController.js"></script>
+<script src="bkcore.coffee/controllers/GamepadController.js"></script>
+<script src="bkcore.coffee/Timer.js"></script>
+<script src="bkcore.coffee/ImageData.js"></script>
+<script src="bkcore.coffee/Utils.js"></script>
+
+<script src="bkcore/threejs/RenderManager.js"></script>
+<script src="bkcore/threejs/Shaders.js"></script>
+<script src="bkcore/threejs/Particles.js"></script>
+<script src="bkcore/threejs/Loader.js"></script>
+<script src="bkcore/Audio.js"></script>
+
+<script src="bkcore/hexgl/HUD.js"></script>
+<script src="bkcore/hexgl/RaceData.js"></script>
+<script src="bkcore/hexgl/ShipControls.js"></script>
+<script src="bkcore/hexgl/ShipEffects.js"></script>
+<script src="bkcore/hexgl/CameraChase.js"></script>
+<script src="bkcore/hexgl/Gameplay.js"></script>
+<script src="bkcore/hexgl/tracks/Cityscape.js"></script>
+<script src="bkcore/hexgl/HexGL.js"></script>
+
+<script>
+/* ------------------------------------------------------------------
+   Practice shell for HexGL.
+
+   HexGL ships a four-step menu (launch.js): pick controls, pick quality,
+   read the help card, then race. None of that belongs inside the hub,
+   which has already made those choices - so this page skips straight to a
+   running track and adds the one thing HexGL has no concept of: a target
+   to beat.
+
+   HexGL itself is untouched. Every hook below is an instance-level
+   override, so dropping a newer HexGL over games/hexgl/ breaks nothing.
+------------------------------------------------------------------- */
+(function () {
+  'use strict';
+
+  var $ = function (id) { return document.getElementById(id); };
+  var qp = function (k, d) {
+    var m = new RegExp('[?&]' + k + '=([^&]*)').exec(window.location.search);
+    return m ? decodeURIComponent(m[1]) : d;
+  };
+
+  /* Laps stand in for distance. One lap is the practice default: a
+     Cityscape lap is long enough to be a real test and short enough that a
+     failed run costs thirty seconds, not three minutes. */
+  var LAPS = Math.max(1, Math.min(3, parseInt(qp('laps', '1'), 10) || 1));
+  var TARGET = parseInt(qp('target', '0'), 10) || 0;
+  var QUALITY = Math.max(0, Math.min(3, parseInt(qp('quality', '3'), 10)));
+
+  /* The ship the hub built out of the player's prompt. Absent (or corrupt -
+     it arrives through a URL) means stock HexGL, which is exactly what this
+     page did before prompts existed. */
+  var BUILD = null;
+  try { BUILD = JSON.parse(qp('build', '')); } catch (e) { BUILD = null; }
+  if (BUILD && typeof BUILD.tune !== 'object') BUILD = null;
+
+  /* Every number is clamped to a sane band before it reaches ShipControls.
+     The hub computes these, but the hub is a query string away from anyone
+     with a keyboard, and a maxSpeed of 1e9 is not a run. */
+  var LIMITS = {
+    maxSpeed: [3, 14], thrust: [0.008, 0.05], airResist: [0.008, 0.06],
+    boosterSpeed: [1, 9], angularSpeed: [0.006, 0.03], airAngularSpeed: [0.006, 0.03],
+    shieldDamage: [0, 0.3], collisionSpeedDecrease: [0.5, 1],
+    collisionSpeedDecreaseCoef: [0.1, 0.9]
+  };
+
+  function applyBuild(controls) {
+    if (!BUILD) return;
+    for (var k in LIMITS) {
+      var v = BUILD.tune[k];
+      if (typeof v !== 'number' || !isFinite(v)) continue;
+      controls[k] = Math.max(LIMITS[k][0], Math.min(LIMITS[k][1], v));
+    }
+  }
+
+  /* Formatting has to match HexGL's own HUD, or the target banner and the
+     lap clock would disagree about what 1'32''450 means. */
+  function fmt(ms) {
+    var t = bkcore.Timer.msToTimeString(ms);
+    return t.m + "'" + t.s + "''" + t.ms;
+  }
+  function signed(ms) {
+    var sign = ms < 0 ? '-' : '+';
+    var a = Math.abs(ms);
+    var sec = Math.floor(a / 1000);
+    var cs = Math.floor((a % 1000) / 10);
+    return sign + sec + '.' + (cs < 10 ? '0' + cs : cs) + 's';
+  }
+
+  function post(msg) {
+    if (window.parent === window) return;
+    msg.source = 'hexgl-practice';
+    try { window.parent.postMessage(msg, '*'); } catch (e) {}
+  }
+
+  var hexGL = null;
+  var finished = false;
+  var deltaTimer = null;
+
+  function build() {
+    finished = false;
+    $('result').className = 'pane hidden';
+    $('loading').className = 'pane';
+    $('barfill').style.width = '0%';
+
+    hexGL = new bkcore.hexgl.HexGL({
+      document: document,
+      width: window.innerWidth,
+      height: window.innerHeight,
+      container: $('main'),
+      overlay: $('overlay'),
+      /* gameover is deliberately null. HexGL's built-in panel hides the
+         whole canvas and reloads the page on click; the practice result has
+         to stay inside the iframe. */
+      gameover: null,
+      quality: QUALITY,
+      difficulty: 0,
+      hud: true,
+      controlType: 0,          // keyboard
+      godmode: false,
+      track: 'Cityscape'
+    });
+    window.hexGL = hexGL;
+
+    hexGL.load({
+      onLoad: function () {
+        hexGL.init();
+
+        /* displayScore assumes three lap times and a DOM full of elements
+           this page does not have. Replaced wholesale. */
+        hexGL.displayScore = onFinish;
+
+        /* After init(), which is where the track calls tweakShipControls()
+           and stamps the difficulty preset over everything. Applying the
+           build before that point would silently do nothing. */
+        applyBuild(hexGL.components.shipControls);
+        if (BUILD) {
+          $('build-name').textContent = BUILD.arch || 'YOUR SHIP';
+          $('build-spec').textContent = 'TOP ' + BUILD.spec.top.toFixed(1) +
+            '   GRIP ' + Math.round(BUILD.spec.grip * 100) + '%' +
+            '   HULL ' + BUILD.spec.hits + ' HITS';
+          $('build').className = '';
+        }
+
+        if (TARGET > 0) {
+          $('target-val').textContent = fmt(TARGET);
+          $('target').className = '';
+          startDelta();
+        }
+
+        $('loading').className = 'pane hidden';
+        hexGL.start();
+
+        /* start() is what builds gameplay (via initGameplay), so maxLaps can
+           only be lowered afterwards. It is read fresh each tick inside the
+           timeattack mode function, and gameplay.start() has already painted
+           the HUD with 3, so the lap counter is repainted here too. */
+        hexGL.gameplay.maxLaps = LAPS;
+        if (hexGL.hud) hexGL.hud.updateLap(1, LAPS);
+        window.focus();
+        post({ type: 'started', laps: LAPS, targetMs: TARGET });
+      },
+      onError: function (s) {
+        console.error('[hexgl] failed to load ' + s);
+        $('loading').innerHTML = '<div class="lbl">Track failed to load</div>';
+        post({ type: 'error', reason: 'load' });
+      },
+      onProgress: function (p) {
+        $('barfill').style.width = (p.loaded / p.total * 100) + '%';
+      }
+    });
+  }
+
+  /* Live gap to the target, on its own interval rather than inside HexGL's
+     render loop - the banner does not need 60fps, and hooking the loop
+     would mean touching HexGL. */
+  function startDelta() {
+    if (deltaTimer) clearInterval(deltaTimer);
+    deltaTimer = setInterval(function () {
+      if (!hexGL || !hexGL.gameplay || finished || TARGET <= 0) return;
+      if (hexGL.gameplay.step !== 4) return;      // 4 == racing, after the countdown
+      var d = $('delta');
+      var gap = hexGL.gameplay.timer.time.elapsed - TARGET;
+      d.textContent = signed(gap);
+      d.className = gap > 0 ? 'up' : 'down';
+    }, 100);
+  }
+
+  /* Reads the run back as a note about the prompt.
+
+     Deliberately one suggestion, never a list: the player is supposed to
+     change one thing and run it again, and a wall of advice makes it
+     impossible to tell which edit did the work. The stat named is always
+     the one the run actually failed on, not the lowest number on the card -
+     a fragile ship that finished comfortably does not need a hull lecture. */
+  function coach(wrecked, timed, passed, finishTime) {
+    if (!BUILD) return '';
+    var st = BUILD.stats;
+    var name = '<b>' + (BUILD.arch || 'that ship') + '</b>';
+
+    if (wrecked) {
+      return name + ' ran out of hull before the finish. The prompt bought ' +
+        'speed and aggression with armour - if that was not deliberate, say ' +
+        'something about caution, control or a reinforced hull and run it again.';
+    }
+    if (!timed) {
+      return name + ' covered the distance. Set a target to find out whether ' +
+        'the prompt was actually quick or just careful.';
+    }
+    if (passed) {
+      var room = Math.round((TARGET - finishTime) / 1000);
+      return name + ' covered the distance with ' + room + 's to spare. ' +
+        (room > 12
+          ? 'Comfortable - try the next target up, or spend some of that margin on a leaner hull.'
+          : 'That is a prompt worth keeping.');
+    }
+    var miss = Math.round((finishTime - TARGET) / 1000);
+    if (st.s < 0.5) {
+      return name + ' missed by ' + miss + 's, and it was never fast enough to make it: ' +
+        'speed came out at ' + Math.round(st.s * 100) + '. The prompt needs to ask ' +
+        'for pace directly - top speed, flat out, full throttle.';
+    }
+    if (st.d > 0.65) {
+      return name + ' missed by ' + miss + 's. It was built to survive rather than ' +
+        'to arrive - armour is paid for out of speed, so drop some of the caution ' +
+        'wording and see what the clock does.';
+    }
+    return name + ' missed by ' + miss + 's with a ship that was quick enough on paper. ' +
+      'Grip is spent on top speed here: either ask for more control in the corners, ' +
+      'or keep the build and drive it cleaner.';
+  }
+
+  function onFinish(finishTime, lapTimes) {
+    finished = true;
+    hexGL.active = false;
+    if (deltaTimer) clearInterval(deltaTimer);
+
+    /* A destroyed ship still routes through onFinish carrying whatever was
+       on the clock. That is not a lap time and must not be reported as one. */
+    var wrecked = hexGL.gameplay.result === hexGL.gameplay.results.DESTROYED;
+    var timed = !wrecked && TARGET > 0;
+    var passed = timed && finishTime <= TARGET;
+
+    $('target').className = 'hidden';
+    $('verdict').textContent = wrecked ? 'WRECKED'
+      : (!timed ? 'FINISH' : (passed ? 'TARGET MET' : 'TOO SLOW'));
+    $('verdict').className = 'verdict ' + ((wrecked || (timed && !passed)) ? 'fail' : 'pass');
+    $('res-time').textContent = wrecked ? '--' : fmt(finishTime);
+    $('res-vs').textContent = timed
+      ? 'TARGET ' + fmt(TARGET) + '   ' + signed(finishTime - TARGET)
+      : '';
+    $('res-laps').textContent = (!wrecked && lapTimes && lapTimes.length)
+      ? lapTimes.map(function (t, i) { return 'LAP ' + (i + 1) + '  ' + fmt(t); }).join('     ')
+      : '';
+    $('res-coach').innerHTML = coach(wrecked, timed, passed, finishTime);
+    $('result').className = 'pane';
+
+    post({
+      type: 'finish',
+      timeMs: wrecked ? null : finishTime,
+      targetMs: TARGET || null,
+      lapTimes: wrecked ? [] : (lapTimes || []),
+      laps: LAPS,
+      wrecked: wrecked,
+      passed: passed,
+      /* Handed back so the hub can talk about the run in terms of the
+         prompt without having to remember what it sent. */
+      build: BUILD ? { arch: BUILD.arch, stats: BUILD.stats } : null
+    });
+  }
+
+  $('btn-retry').onclick = function () { window.location.reload(); };
+  $('btn-exit').onclick = function () { post({ type: 'exit' }); };
+
+  /* Esc leaves the run. The hub binds it too, but a focused iframe eats the
+     key, so it has to be handled on both sides. */
+  window.addEventListener('keydown', function (e) {
+    if (e.keyCode === 27) post({ type: 'exit' });
+  });
+
+  var probe = document.createElement('canvas');
+  var gl = null;
+  try { gl = probe.getContext('webgl') || probe.getContext('experimental-webgl'); } catch (e) {}
+  if (!gl) {
+    $('loading').innerHTML = '<div class="lbl">WebGL unavailable</div>';
+    post({ type: 'error', reason: 'webgl' });
+    return;
+  }
+
+  build();
+})();
+</script>
+</body>
+</html>
