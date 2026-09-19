@@ -1,295 +1,159 @@
-# Train Your AI Fighter
+# AARAGE — AI Agent Battle Arena on Monad
 
-**Train your AI fighter in 60 seconds, then fight someone else's.**
+**Build an AI fighter, reveal its strategy, bet on the outcome, watch them fight, and let Monad settle the result on-chain.**
 
-Two players each type a plain-English strategy. The prompt is parsed into
-`{aggression, defense, speed}`, and two AI-controlled fighters battle it out
-automatically — no human input once the bell rings. The winner is minted as an
-NFT on Monad.
+AARAGE is an autonomous, prompt-driven AI combat simulation and decentralized betting arena built for Monad Testnet. Two players define plain-English tactical strategies, which are compiled into balanced combat attributes. Strategies are publicly revealed for pre-match pari-mutuel spectator betting, battles play out deterministically with autonomous utility-AI agents, and results are cryptographically settled on Monad with fair payout distribution and dynamic victory NFT minting.
 
+---
 
+## 🏆 Hackathon & Deployment Links
 
-## Run it
+| Resource | Link / Address |
+|---|---|
+| **Live Public Application** | [https://gamingnft.onrender.com/](https://gamingnft.onrender.com/) |
+| **Arena Battle Contract (`ArenaBattle.sol`)** | [`0x0329D1A516e9F5f8a89B48C4AD0515884f0652a5`](https://testnet.monadvision.com/address/0x0329D1A516e9F5f8a89B48C4AD0515884f0652a5) |
+| **Deployer / Arbiter / Fighter Contract** | [`0x1F9326384C92d29915fd4EDD22797C3E664Dc651`](https://testnet.monadvision.com/address/0x1F9326384C92d29915fd4EDD22797C3E664Dc651) |
+| **Fighter NFT Contract (`FighterNFT.sol`)** | [`0xD12205ea18E336F2a4995Cc0Ef6226efaC48639F`](https://testnet.monadvision.com/address/0xD12205ea18E336F2a4995Cc0Ef6226efaC48639F) |
+| **Network** | Monad Testnet (Chain ID `10143`) |
+| **Testnet RPC** | `https://testnet-rpc.monad.xyz` |
+| **MonadVision Explorer** | [https://testnet.monadvision.com](https://testnet.monadvision.com) |
 
-There is **no build step**. No npm install, no bundler, no framework.
+---
 
+## ⚡ The Core Product Loop
+
+```text
+[ Player Prompts ] ──> [ Strategy Analysis & Stat Normalization ]
+                                    │
+                                    ▼
+[ Pre-Match Betting Window ] ──> [ On-Chain Escrow Pool (ArenaBattle.sol) ]
+                                    │
+                                    ▼
+[ Autonomous 60 Hz Combat ]  ──> [ Deterministic Simulation & Result Digest ]
+                                    │
+                                    ▼
+[ EIP-712 Settlement ]       ──> [ 95% Distributed to Winning Bettors / 5% Fee ]
+                                    │
+                                    ▼
+                             [ Dynamic Winner NFT Minted on Monad ]
+```
+
+1. **Strategy Creation**: Two fighters receive plain-English instructions (e.g. *"patient counter-puncher, stay out of reach, punish whiffs"*).
+2. **Strategy Reveal**: Both fighter profiles, tactical archetype names, and normalized stats are revealed publicly on the betting board.
+3. **Pre-Match Pari-Mutuel Escrow**: Spectators and players place bets in MON directly into the `ArenaBattle` contract before the match starts.
+4. **Deterministic Battle**: Once betting closes, a committed seed unseals the fight. Two autonomous agents run at 60 Hz without human intervention.
+5. **On-Chain Settlement**: The match arbiter generates an EIP-712 cryptographic settlement signature binding the match ID, seed, agent hashes, and outcome digest.
+6. **Payout & NFT Mint**: 95% of the escrow pool is unlocked for proportional withdrawal by winning bettors (5% protocol fee). The winning fighter is minted as an on-chain NFT receipt.
+
+---
+
+## 🔗 Smart Contract Architecture
+
+The contracts run on Monad Testnet and enforce strict economic invariants:
+
+### 1. `ArenaBattle.sol` ([`0x0329D1A516e9F5f8a89B48C4AD0515884f0652a5`](https://testnet.monadvision.com/address/0x0329D1A516e9F5f8a89B48C4AD0515884f0652a5))
+- **Strict Pari-Mutuel Escrow**: All bets are locked before fight execution.
+- **Commit-Reveal Seed Scheme**: Seeds are committed before pools open, preventing frontrunning of deterministic simulation outcomes.
+- **EIP-712 Cryptographic Verification**: Settles matches using typed structured signatures (`settleMatch`). Verifies match parameters, winner, finish type (KO / Timeout / Draw), simulation version, and result digest.
+- **Pull-Payment Pattern**: Winnings and refunds are claimed individually (`claim()`) rather than pushed in loops, preventing reentrancy and denial-of-service vulnerabilities.
+- **Void & Refund Guarantees**: Unresolved matches or draws automatically unlock 100% principal refunds with zero fee deduction.
+
+### 2. `FighterNFT.sol` ([`0xD12205ea18E336F2a4995Cc0Ef6226efaC48639F`](https://testnet.monadvision.com/address/0xD12205ea18E336F2a4995Cc0Ef6226efaC48639F))
+- **On-Chain Victory Receipts**: Minted automatically upon match settlement exclusively via authorized arena calls.
+- **Metadata & Dynamic Attributes**: Records fighter archetype, stats (`aggression`, `defense`, `speed`), winning prompt, and match seed.
+
+---
+
+## 🧠 Autonomous AI & Simulation Engine
+
+### Dual-Layer Prompt Compilation
+- **Primary / Fallback Engine (`js/prompt-parser.js`)**: A deterministic zero-latency lexicon parser (~220 combat terms). Handles intensifiers (*"very"*, *"always"*), diminishers (*"slightly"*), negation (*"never attack"* lowers aggression), and compounds (*"hit and run"*).
+- **Gemini Tactical Advisor (`server.js` + `js/gemini.js`)**: Optional server-side LLM analysis (Gemini 3.6 Flash) extracting fighter personality, archetype names, and tactical traits with graceful fallback to local parsing.
+- **Stat Budgeting**: Total stats are strictly normalized to ~1.95 (`aggression + defense + speed`). Players cannot create all-max fighters; every prompt requires strategic trade-offs.
+
+### Three-Tier Agent Decision Loop (`js/ai-controller.js`)
+Inspired by agent-driven game architectures (The Sims IAUS / Guild Wars):
+- **Plan Tier (~1–2s)**: Selects macro game plan (`RUSH`, `ZONE`, `BAIT`, `HUNT`, `TURTLE`).
+- **Utility Tier (every 6–14 frames)**: Continuously scores candidate actions against dynamic considerations (range error, attack cooldowns, opponent recovery state, health differentials).
+- **Reflex Tier (every frame)**: Handles hitstop, stun lockouts, commitment windows, and instant punish reflexes.
+- **Opponent Modeling**: Exponential moving averages track opponent jump frequency, whiff rates, and aggression tendencies to adapt mid-match.
+
+### Deterministic Arena Physics
+- **Fixed 60 Hz Simulation**: Identical match seeds produce 100% reproducible fight trajectories, verifiable headlessly or in-browser.
+- **Non-Crossing Arena Geometry**: Prevents sprite orientation desync with a strict 70px mutual separation floor.
+- **Pressure Ramp & Sudden Death**: At 7s, global pressure begins ramping; at 20s, sudden death disables retreat and doubles damage, preventing stall matches and guaranteeing decisive finishes within ~24 seconds.
+
+---
+
+## 🛠️ Local Development & Quickstart
+
+The application can run fully local with zero external build step.
+
+### Prerequisites
+- Node.js 18+ (for relay server, arbiter, and Gemini proxy)
+
+### Quick Run
 ```bash
-python -m http.server 8080
-# then open http://localhost:8080
+# Clone the repository
+git clone https://github.com/Tanuj-A06/Aarage.git
+cd Aarage
+
+# Install dependencies (ethers)
+npm install
+
+# Start the local server
+npm start
+# Server listens on http://localhost:8080
 ```
 
-Use a local server rather than opening `index.html` directly — `file://` breaks
-MetaMask injection, which the chain pass will need.
-
-Everything runs **fully offline**. No CDN scripts, no webfonts, no audio files,
-no API calls. gsap is vendored into `js/vendor/`; all sound is synthesised with
-WebAudio at runtime.
+Open `http://localhost:8080` in your browser. Connect MetaMask to **Monad Testnet** to test betting and on-chain settlements.
 
 ---
 
-## How it works
+## 🎮 URL Controls & Debugging
 
-### The "AI" is keyword matching, not an LLM
-
-Prompts are capped at a hard **200 words**, enforced live as you type (with a
-word counter) rather than truncated at submit — a strategy cut in half would
-lose its keywords and produce a fighter the player never asked for.
-
-`js/prompt-parser.js` scans the prompt against a lexicon of ~220 terms and maps
-them onto three stats. It handles intensifiers (`very`, `always`), diminishers
-(`slightly`, `sometimes`), negation (`never attack` *reduces* aggression), and
-multi-word compounds (`hit and run`, `run away`, `all out`).
-
-This is deliberate. A real LLM call would add latency, a network dependency and
-an API key to the one path that must never fail on stage. The parser runs
-synchronously in well under a millisecond, so **the bars react live as you
-type** — which is also the most fun part of the UI. The 3-second "ANALYZING
-STRATEGY" screen is pure theatre.
-
-Two details worth knowing:
-
-- **Stat budget.** Stats are normalised to a total of ~1.95. Without this, a
-  prompt that stacks every keyword just produces a strictly better fighter and
-  prompts stop mattering. The budget forces every prompt to be a trade-off.
-- **No degenerate fighters.** A prompt with no recognised keywords ("banana
-  pancakes") is hashed into a distinct, playable stat line rather than a puddle
-  of averages — and the UI says it is improvising.
-
-### The fighters run a three-tier agent loop
-
-`js/ai-controller.js` is modelled on how agent-driven games actually work:
-
-| tier | rate | job |
-|---|---|---|
-| **PLAN** | every ~1–2s, or on a big event | pick a game plan: RUSH / ZONE / BAIT / HUNT / TURTLE |
-| **UTILITY** | every 6–14 frames | *score* every candidate action, pick weighted-randomly among the positives |
-| **REFLEX** | every frame | stun lockout, attack commitment, dodge the opponent's windup, punish |
-
-The slow-plan / fast-execute split is the same shape LLM-agent games (Voyager,
-Generative Agents) use — we just derive the plan from stats and an opponent
-model instead of from a language model, so it costs microseconds and never
-stalls a frame.
-
-The **UTILITY** tier is the thing that keeps fights from looking like a loop.
-Instead of a cascade of `if (rand < p)` thresholds, each action is scored
-against considerations — range error, cooldown readiness, opponent stunned /
-recovering / airborne, health, plan bias — and the scores slide continuously.
-This is Utility AI (IAUS), the approach The Sims and Guild Wars 2 use.
-
-Each AI also keeps an **opponent model**: exponential moving averages of how
-often the other fighter jumps, attacks and whiffs. Jump into someone who
-attacks a lot and you get hit out of the air, so the score for jumping drops;
-face someone who whiffs a lot and the HUNT (whiff-punish) plan gets weighted up.
-That is what makes the fighters look like they are reading each other.
-
-It is still a **virtual keyboard** — it writes into the same `keys` object the
-human controls used. That keeps upstream's movement and sprite logic on the
-path it was written for, in particular `handleMovement()`'s unconditional
-`switchSprite('run'/'idle')` every frame, which is the only thing that releases
-a fighter from a finished attack animation. It also means `?human=1` still
-works, so you can play one side to tell an AI bug from a geometry bug.
-
-`HOLD` never means standing still — it runs footsies, shuffling in and out
-around a preferred distance, which doubles as whiff bait.
-
-### Arena geometry (the thing that constrains everything)
-
-Neither sprite sheet has a mirrored variant, so **the fighters must never cross
-over** — if they did, both attack boxes would point away from the opponent and
-no hit could ever land again. `resolveSeparation()` enforces a hard 70px floor.
-
-With `d = enemy.x - player.x`, both fighters can land a hit in `d ∈ [70, 220]`.
-The AI targets ~140–195 depending on its stats; turtles hover a body-length
-further out than berserkers, which is the clearest visual tell of a defensive
-prompt.
-
-### Nobody gets a boring fight
-
-From 7 seconds, a global `pressure` term ramps to 1.0 at 18s: retreat decays,
-aggression climbs, cooldowns shorten, the comfortable distance shrinks and
-damage scales up. At 20s it becomes **SUDDEN DEATH** — retreat is disabled and
-damage doubles.
-
-This is why two cowardly prompts still produce a finish (~22s average) instead
-of a 30-second standoff, and the last few seconds are the most exciting part of
-the fight. It is a feature the audience can see, not a hidden fudge.
-
-### What's animated
-
-The eight sprite animations that ship with the artwork (idle, run, jump, fall,
-attack1, attack2, takeHit, death) are all wired — upstream never used Attack2,
-so combos alternate between the two swings. Everything else is procedural, in
-`js/fx.js`, `js/scene3d.js` and `Fighter.render()` / `Fighter.drawFX()`.
-
-**The characters.** Every effect on a fighter is a flat-coloured silhouette of
-the exact frame being drawn, so it can never desync from the animation. Sheets
-are baked once into tinted copies (`silhouetteOf`) with a `source-in`
-composite and reused — no `ctx.filter`, which is slow and was a silent no-op in
-Safari for years.
-
-- **Rim glow** in each fighter's colour, eight offset silhouettes. Swells on
-  the wind-up and burns red with rage, and separates the sprites from a busy
-  backdrop at projector distance
-- **Anticipation** — a crouch before every swing, timed to stretch out exactly
-  on the damage frame
-- **Knockback slide** — the sim teleports the defender `KNOCKBACK` px; the
-  sprite starts where it stood and catches up over ~8 frames, so weight
-  visibly transfers instead of both bodies snapping to new coordinates
-- **Hit flash** — a white stamp on contact. Only the Samurai sheet ships a
-  silhouette take-hit frame, so without this the same hit read softer on P2
-- **Motion smear**, **idle breathing**, **squash & stretch**, **ground
-  shadows** that stretch with a sprint and stay planted during a slide
-- **Speed afterimages** as neon ghosts, and a **rage flare** that beats faster
-  the closer to death a fighter gets — rage drives damage, cooldown and speed,
-  and had no tell before
-
-> The body itself is always drawn at full opacity. Ghost layers sit strictly
-> behind it and stay tight — an early pass had a scaled-up white wind-up ghost
-> and a trail sample at the fighter's own position, and the fighters stopped
-> reading as solid. If you can pick a smear out as a shape, it's too strong.
-
-**The hit.** Hitstop (4–6 frames of frozen physics), camera punch and a held
-KO push, screen shake, white flash, a directional **shockwave**, a **contact
-starburst**, streaked **sparks**, dust scuffs, and **damage numbers** that pop
-before they drift, sized by damage.
-
-**The arena.** A crowd that comes off its seats and throws its arms up when the
-fight heats up, sweeping coloured **spotlights** across the deck, camera dolly
-and roll, background parallax, KO slow-motion, and a sudden-death vignette with
-the cabinet bezel pulsing red.
-
-**The UI** (`styles.css`): screen entrances, staggered stacks, a rolling CRT
-band and flicker, attract-mode pulse on INSERT COIN, health bars with energy
-flowing through them, an announce that overshoots and throws a shockwave, and
-per-line log entrances. Honours `prefers-reduced-motion`; the canvas layer does
-not yet.
-
-All of it is render-layer only. Verified: across 150 fights, the same seed
-replays to an identical outcome, and a fight driven through the full render
-path lands on the same result as the same fight run headlessly.
-
----
-
-## URL parameters
-
-| param | effect |
+| Parameter | Effect |
 |---|---|
-| `?p1=...&p2=...` | pre-fill both prompts |
-| `&auto=1` | skip straight past prompt entry into the fight |
-| `?seed=N` | replay an exact fight — fights are fully deterministic |
-| `?bench=200` | headless balance run, results via `console.table` |
-| `?human=1` | drive P1 yourself (`a`/`d` move, `w` jump, space attack) |
-| `?hitboxes=1` | draw body and attack boxes |
-
-**Demo tip:** bookmark a `?p1=...&p2=...&seed=...&auto=1` URL. Typing prompts
-live on a projector while nervous is a known way to lose two minutes. When
-rehearsal throws a great fight, the seed is shown bottom-right on the HUD —
-write it down.
+| `?p1=...&p2=...` | Pre-fill player prompts |
+| `&auto=1` | Skip directly from prompt configuration into the match |
+| `?seed=N` | Replay an exact deterministic fight seed |
+| `?bench=200` | Headless balance run of 200 matches with matrix metrics |
+| `?noai=1` | Force offline local lexicon parser (bypass Gemini) |
+| `?hitboxes=1` | Render physical hurtboxes and attack strike boundaries |
+| `?human=1` | Manual control of Fighter 1 (`A`/`D` move, `W` jump, `Space` attack) |
 
 ---
 
-## Balance
-
-`?bench=200` runs every archetype matchup headlessly and prints win rates,
-average duration and KO rate. Current state:
-
-- Mirror matches sit between 44/56 and 54/46 — essentially even.
-- The matrix is antisymmetric (berserker-vs-turtle 93/7 mirrors
-  turtle-vs-berserker 8/93), which is what proves results depend on the
-  archetype and not on which side you were given.
-- Durations run 7.6s (berserker mirror) to 22.4s (coward mirror).
-- No archetype dominates: assassin beats berserker, berserker beats turtle,
-  turtle beats coward, balanced beats turtle. Aggression is strong but not a
-  free win.
-
-### Six side-biases the bench caught
-
-P1 originally lost almost every fight. All six were invisible without
-thousands of simulated rounds:
-
-| bug | effect |
-|---|---|
-| Double KO was always awarded to P2 | biggest single cause; aggressive mirrors trade most |
-| Damage timing keyed off sprite frames — P1 telegraphed 12 frames, P2 only 10 | P1 whiffed ~7% more |
-| Samurai's attack animation ran 30 frames vs the Monk's 20 | P1 locked helpless 50% longer per swing |
-| Hits resolved sequentially, so P1's hit cancelled P2's on the same frame | P1 won every simultaneous trade (the *opposite* bias) |
-| `hitMin` 50 vs 0 damped P1's close-range attack score | P2 got ~5% more attacks |
-| Start positions gave P2 54px more retreat room | P1 cornered first |
-
-Two more that were not side-biases but broke the game: the AI attacked while
-airborne (geometrically impossible to connect), and `MAX_KITE` was *below* the
-220 strike ceiling, so retreating could never take a fighter out of reach —
-nobody ever whiffed, so whiff-punishing never fired and defensive prompts had
-no way to win.
-
-The main balance dials are `CONFIG.cooldown`, `CONFIG.baseDamage` and
-`CONFIG.ATTACK_STARTUP` in `js/config.js`. Re-run the bench after touching any
-of them.
-
----
-
-## Project layout
+## 📁 Repository Structure
 
 ```
-index.html              markup for every screen
-styles.css              arcade cabinet: solid fills, hard borders, no glass
-js/config.js            every tunable number + the arena geometry note
-js/utils.js             math, seeded PRNG, collision
-js/classes.js           Sprite / Fighter
-js/prompt-parser.js     prompt -> stats (pure, no DOM)
-js/ai-controller.js     the fighter brains
-js/fx.js                WebAudio SFX + the whole effects layer
-js/game.js              arena, loop, hit resolution, ?bench
-js/ui.js                screen flow, live parsing, HUD, winner
-js/blockchain.js        SIMULATED mint (see below)
-js/vendor/gsap.min.js   vendored, not CDN
-assets/img/             sprites from the upstream repo
+├── index.html              # Public landing page & arcade entry
+├── play.html               # Arena UI shell & HUD
+├── styles.css              # Arcade cabinet styling & CRT shaders
+├── server.js               # Static server, Gemini proxy, rooms relay & arbiter
+├── arbiter.js              # EIP-712 settlement signature signer
+├── js/
+│   ├── config.js           # Balance parameters & Monad contract configuration
+│   ├── game.js             # Fixed 60 Hz simulation loop & hit resolution
+│   ├── ai-controller.js    # Utility AI, reflex tier & opponent modeling
+│   ├── prompt-parser.js    # Lexicon strategy parser & stat normalizer
+│   ├── blockchain.js       # Ethers.js Monad provider, contract calls & betting flow
+│   ├── classes.js          # Fighter & Sprite simulation classes
+│   ├── fx.js               # WebAudio sound synthesizers & visual FX
+│   └── ui.js               # Screen flow, wallet connection & settlement display
+├── contracts/
+│   ├── contracts/
+│   │   ├── ArenaBattle.sol # Pari-mutuel betting escrow & EIP-712 settlement
+│   │   ├── FighterNFT.sol  # Dynamic victory NFT contract
+│   │   └── AgentTypes.sol  # Structs and hashing utilities
+│   ├── scripts/deploy.js   # Hardhat deployment script for Monad
+│   └── hardhat.config.js   # Monad testnet network configuration
 ```
 
 ---
 
-## Blockchain: not wired yet
+## 📜 Credits & License
 
-`js/blockchain.js` currently runs a **simulated** mint — the full sequence and
-success screen, with no wallet and no network. The success screen is labelled
-`SIMULATED` on purpose: a placeholder tx hash shown to judges as a real
-on-chain mint is the kind of thing that sinks a submission the moment somebody
-opens the explorer.
-
-Everything the real path needs is captured at fight end in a single
-`UI.pendingMint` object — `{ prompt, stats, archetype, won, hpRemaining,
-durationMs, seed, timestamp }`. That is the whole interface.
-
-Decisions already made for that pass:
-
-- **Monad Testnet**, chain ID `10143`, RPC `https://testnet-rpc.monad.xyz`,
-  explorer `https://testnet.monadexplorer.com`, faucet `https://faucet.monad.xyz`
-- **Fully on-chain metadata** — the contract stores the prompt and stats and
-  builds `tokenURI` as Base64 JSON with a generated SVG. No IPFS, no pinning
-  service, no API key, nothing to fail live.
-- **Deploy via Remix**, no Hardhat and no private key on disk.
-
-`MONAD` in `js/config.js` already holds the network config and a
-`USE_REAL_CHAIN` flag.
-
----
-
-## Demo script (2 minutes)
-
-1. *"Two prompts. No controllers. Nobody touches a key after this."*
-   P1: `relentless berserker, attack without mercy, never back down`
-   P2: `patient counter-puncher, stay out of range, punish mistakes`
-2. Keyword chips fly into the stat bars as you type. Lock in.
-3. ANALYZING → character-select reveal: **BERSERKER** vs **TACTICIAN**.
-4. ~11 second fight. The berserker rushes and hugs close with a red aura; the
-   tactician holds a longer distance, dodge-jumps, and punishes the stun for
-   multi-hit chains. K.O. with hitstop, screen shake and a crowd cheer.
-5. Winner screen shows the winning prompt → **MINT ON MONAD**.
-
----
-
-## Credits
-
-- Game base: [Ali-Cheikh/Fight-ME-Monk](https://github.com/Ali-Cheikh/Fight-ME-Monk) (MIT), Chris Courses lineage
-- Sprites: LuizMelo (Martial Hero 1 & 2)
-- gsap 3.9.1, vendored locally
+- **Base Sprites**: LuizMelo (Martial Hero 1 & 2)
+- **Engine Heritage**: Ali-Cheikh (Fight-ME-Monk)
+- **License**: MIT
