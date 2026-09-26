@@ -30,7 +30,9 @@ services:
     buildCommand: npm install
     startCommand: node server.js
 
-    # Cheap, keyless, and already reports whether the relay is up.
+    # Cheap, keyless, and already reports whether the relay is up. It also
+    # reports the house floor's tables and their phases, so "is the demo
+    # alive" is answerable without loading the page.
     healthCheckPath: /api/health
 
     envVars:
@@ -77,3 +79,39 @@ services:
       # set it to point at a private RPC if the public one rate-limits.
       - key: MONAD_RPC
         sync: false
+
+      # ---- the house floor ----
+      #
+      # Tables the server seats itself, so spectate.html is never an empty
+      # page. They use the same contract, arbiter and market rules as a
+      # match between two humans, and each is labelled HOUSE on the board.
+      #
+      # WHAT THIS COSTS, because it is real money on a real chain:
+      # one full cycle - create, two submitAgents, lockAgents, openBetting,
+      # closeBetting, startMatch, settleMatch - is about 0.12 MON of gas.
+      #
+      # Two things keep that from draining the arbiter:
+      #
+      #   1. A table opens NO market at all unless somebody has loaded the
+      #      floor in the last 90 seconds. An idle deployment costs nothing
+      #      and wakes within about ten seconds of the first visitor.
+      #   2. A market nobody backs on both sides is abandoned rather than
+      #      fought, and the table backs off (45s, 2min, 4min) before
+      #      trying again.
+      #
+      # So budget by traffic, not by uptime: roughly 0.12 MON per completed
+      # match, times however many people are actually betting.
+      #
+      # HOUSE_CHAIN_TABLES is how many tables run on chain (default 2).
+      # Set it to 0 for a deployment that never spends - the floor then
+      # shows nothing until real players open rooms. There is no paper
+      # fallback when an arbiter key IS present, because a paper table
+      # cannot see a bet and so could never legitimately start.
+      - key: HOUSE_CHAIN_TABLES
+        value: "2"
+
+      # "off" disables the house floor entirely. Player rooms still get
+      # real markets - that is not part of the floor and is never gated
+      # behind this.
+      - key: HOUSE_FLOOR
+        value: "on"

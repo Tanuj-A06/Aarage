@@ -992,6 +992,11 @@ setInterval(() => {
      POST /api/match/close      { code, side }        -> the host left
 */
 
+/* The last time anyone asked what was on the board. The house floor spends
+   real gas to open a market, so it asks this before it does: a server
+   nobody is looking at should cost nothing to leave running. */
+let lastBoardPoll = 0
+
 const board = new Map()            // code -> snapshot
 const BOARD_MAX = 400
 const LIVE_TTL = 90 * 1000         // an open match nobody refreshed
@@ -1039,6 +1044,42 @@ function cleanSide(s) {
   }
 }
 
+/* A pair of fighters as the host reports them, clamped the same way the
+   board clamps a snapshot. These become on-chain agent snapshots, so a
+   field that is wrong here is wrong in contract storage - and the stats
+   are re-budgeted rather than trusted, because a host that sent 1/1/1
+   would otherwise put an unbeatable fighter in a market. */
+function cleanAgents(raw) {
+  const o = raw && typeof raw === 'object' ? raw : {}
+  const one = (side) => {
+    const a = o[side] && typeof o[side] === 'object' ? o[side] : null
+    if (!a) return null
+    const st = a.stats && typeof a.stats === 'object' ? a.stats : {}
+    const stats = {
+      aggression: num(st.aggression, 0, 1, 0.35),
+      defense: num(st.defense, 0, 1, 0.35),
+      speed: num(st.speed, 0, 1, 0.35)
+    }
+    const total = stats.aggression + stats.defense + stats.speed
+    if (total > 1.95) {
+      const k = 1.95 / total
+      for (const key in stats) stats[key] = Math.round(stats[key] * k * 100) / 100
+    }
+    return {
+      prompt: str(a.prompt, 280),
+      archetype: str(a.archetype, 24) || 'FIGHTER',
+      tagline: str(a.tagline, 64),
+      stats,
+      model: str(a.model, 64),
+      modelVersion: str(a.modelVersion, 64)
+    }
+  }
+  const p1 = one('p1')
+  const p2 = one('p2')
+  if (!p1 || !p2 || !p1.prompt || !p2.prompt) return null
+  return { p1, p2 }
+}
+
 function cleanSnap(raw, code) {
   const o = raw && typeof raw === 'object' ? raw : {}
   const chain = o.chain && typeof o.chain === 'object' ? o.chain : {}
@@ -1063,6 +1104,24 @@ function cleanSnap(raw, code) {
     how: str(o.how, 24),
     seed: num(o.seed, 0, 0xffffffff, 0) >>> 0,
     startedAt: num(o.startedAt, 0, 1e15, 0),
+
+    /* A house match: seated, run and reported by this server rather than by
+       two players (house/director.js). It is on the board so the floor is
+       never empty, and it is FLAGGED so that it is never mistaken for two
+       humans - the one guarantee a house match cannot offer is the arbiter's
+       "both machines independently agreed", because there is only one
+       machine. js/spectate.js labels every row and panel carrying this.
+
+       Note where this flag can come from: /api/match/announce runs
+       untrusted host input through cleanSnap too, so a browser could set
+       it. That direction is harmless - the flag only ever ADDS a caveat to
+       what is claimed, and a host lying that its own match is house-run
+       makes its match look less authoritative, not more. The dangerous
+       direction, a house match that fails to declare itself, is not
+       reachable: the director sets it on every snapshot it writes. */
+    house: !!o.house,
+    houseNote: str(o.houseNote, 64),
+
     updatedAt: Date.now()
   }
 }
@@ -1156,6 +1215,11 @@ const server = http.createServer(async (req, res) => {
       rooms: rooms.size,
       board: board.size,
 
+      /* The floor, so "is spectate.html going to have anything on it" is
+         answerable without loading spectate.html. Still no network done
+         here - this is read straight out of the director's own state. */
+      house: House ? House.status() : null,
+
       // JEV
       jevCached: jevCache.size,
 
@@ -1163,6 +1227,32 @@ const server = http.createServer(async (req, res) => {
          contract - so reporting it is safe and is the fastest way to catch a
          deployment whose env var went missing. The key never appears. */
       arbiter: Arbiter.enabled() ? Arbiter.address() : null,
+
+      /* WHY the chain is or is not live, in one field.
+
+         "The markets are all paper" is the single most confusing state this
+         server has, because everything else about it looks healthy: the
+         page loads, the board fills, bets appear to land. The reason lives
+         in the startup log, which on a hosted deployment means digging
+         through a log viewer to find one line that scrolled past.
+
+         So it is answerable from a URL instead. `ok` false means nothing
+         will ever be settled, and `why` says which of the three conditions
+         failed and what to do about it. */
+      chain: (() => {
+        const why = houseChain.whyNotReady()
+        return {
+          ok: !why,
+          why: why,
+          arena: houseChain.arenaAddress() || null,
+          chainId: houseChain.chainId(),
+          /* The length is the giveaway for the usual cause - a truncated
+             paste. The key itself is never reported, only its shape. */
+          keyChars: String(process.env.ARBITER_PRIVATE_KEY || '')
+            .trim().replace(/^["']|["']$/g, '').replace(/^0x/, '').length,
+          keyCharsExpected: 64
+        }
+      })(),
       arbiterMatches: Arbiter.matches.size
     })
   }
@@ -1343,7 +1433,77 @@ const server = http.createServer(async (req, res) => {
   /* ---- the live match board ---- */
 
   if (pathname === '/api/match/list') {
+    /* Somebody has the floor open. spectate.html polls this every three
+       seconds, so it is the cheapest honest answer to "is anyone here" -
+       and the house floor uses it to decide whether opening a real market
+       is worth real gas. See audience() below. */
+    lastBoardPoll = Date.now()
     return sendJSON(res, 200, { ok: true, now: Date.now(), matches: boardList() })
+  }
+
+  /* The fight running in a house room, for a spectator whose tab opened
+     after the relay carried it. Everything in here is already public - the
+     strategies are on chain and the seed came from the contract - so there
+     is nothing to gate. It is 404 outside the live phase on purpose: a
+     payload for a fight that has not started would be a way to read the
+     outcome while the market is still open. */
+  if (pathname === '/api/house/fight') {
+    const code = String(parsed.query.code || '').toUpperCase()
+    if (!ROOM_CODE_RE.test(code)) return sendJSON(res, 400, { ok: false, error: 'bad code' })
+    /* Both kinds of server-run match answer here: a house table and a
+       player room are the same thing to a spectator who arrived late - a
+       fight already running that they need the inputs for. */
+    const fight = (House && House.fightFor(code)) ||
+      (RoomMatches && RoomMatches.fightFor(code)) || null
+    if (!fight) return sendJSON(res, 404, { ok: false, error: 'no fight running in that room' })
+    return sendJSON(res, 200, { ok: true, fight: fight })
+  }
+
+  /* ------------------------------------------------------------------
+     A player room goes on chain.
+
+     The host posts both revealed fighters; the server opens the market,
+     waits for a backer on each side, starts the fight on the contract's
+     seed and settles it. See house/rooms-chain.js for why the server owns
+     this rather than the two browsers.
+
+     Host only - side 1 - for the same reason the board has one writer: two
+     callers would open two markets for one room.
+  ------------------------------------------------------------------- */
+  if (pathname === '/api/room/chain-open') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { ok: false, error: 'POST only' })
+    let body = null
+    try { body = JSON.parse(await readBody(req, ROOM_MSG_MAX)) || {} } catch (e) {
+      return sendJSON(res, 400, { ok: false, error: 'bad body' })
+    }
+    const code = String(body.code || '').toUpperCase()
+    if (!ROOM_CODE_RE.test(code) || parseInt(body.side, 10) !== 1) {
+      return sendJSON(res, 400, { ok: false, error: 'host only' })
+    }
+    if (!RoomMatches.ready()) {
+      return sendJSON(res, 503, { ok: false, error: 'this server has no chain configured' })
+    }
+    const agents = cleanAgents(body.agents)
+    if (!agents) return sendJSON(res, 400, { ok: false, error: 'need both fighters with stats' })
+    try {
+      const rm = RoomMatches.open(code, agents)
+      return sendJSON(res, 200, { ok: true, phase: rm.phase, matchId: rm.matchId })
+    } catch (e) {
+      return sendJSON(res, 502, { ok: false, error: e.message })
+    }
+  }
+
+  /* A browser's account of the fight it just watched. No wallet and no gas:
+     the server settles with the arbiter's key, and this is the check that
+     it is settling the same fight the players saw. */
+  if (pathname === '/api/room/report') {
+    if (req.method !== 'POST') return sendJSON(res, 405, { ok: false, error: 'POST only' })
+    let body = null
+    try { body = JSON.parse(await readBody(req, 4096)) || {} } catch (e) {
+      return sendJSON(res, 400, { ok: false, error: 'bad body' })
+    }
+    const out = RoomMatches.report(body.matchId, String(body.side || ''), body.result || {})
+    return sendJSON(res, out.ok ? 200 : 404, out)
   }
 
   if (pathname === '/api/match/get') {
@@ -1457,6 +1617,112 @@ function lanAddresses() {
   return out
 }
 
+/* ---------------- matches this server runs ----------------
+
+   Two things here, and they share everything below the surface:
+
+     RoomMatches   the market for a room two real players opened. NOT
+                   optional and not part of the house floor - if this
+                   server has a chain, the rooms on it get markets.
+     House         tables the server seats itself, so spectate.html is
+                   never an empty page (house/director.js).
+
+   Both drive a match through house/market.js, which is where the rule that
+   matters lives: no fight starts until a backer is on each side.
+
+   Everything is passed in rather than imported, because the board, the
+   relay and the stat engine all live in this file's closure - and because
+   a director that can only reach what it was handed cannot grow a second
+   way to write the board. */
+const { RoomMatches } = require('./house/rooms-chain.js')
+const { makeHouseChain } = require('./house/chain.js')
+const houseSim = require('./house/sim.js')
+const PAIRS_COUNT = require('./house/fixtures.js').PAIRS.length
+
+const houseChain = makeHouseChain({
+  root: ROOT,
+  arbiter: Arbiter,
+  jevConfigHash: () => houseSim.jevConfigHash()
+})
+
+RoomMatches.init({
+  chain: houseChain,
+  fanout(code, side, msg) { roomFanout(code, side, msg) },
+  /* Whether anyone is still sitting in the two player seats - a room both
+     players walked out of should not keep opening markets. */
+  playersPresent(code) {
+    const peers = rooms.get(code)
+    if (!peers) return false
+    for (const c of peers) if (c.side === 1 || c.side === 2) return true
+    return false
+  }
+})
+
+/* The floor is on unless told otherwise: an empty spectate page is the
+   wrong default for a demo. It falls back to labelled paper tables on a
+   laptop with no arbiter key. */
+const HOUSE_ENABLED = String(process.env.HOUSE_FLOOR || 'on').toLowerCase() !== 'off'
+
+/* How long after the last visitor the floor keeps spending. Generous
+   enough that someone reading two strategies before betting is not counted
+   as gone, short enough that a tab closed at midnight stops the meter. */
+const AUDIENCE_MS = 90 * 1000
+
+let House = null
+if (HOUSE_ENABLED) {
+  try {
+    const { HouseDirector } = require('./house/director.js')
+
+    House = HouseDirector
+    House.start({
+      /* The board, through the same cleanSnap every announced match goes
+         through. The house gets no privileged path to the board: if a
+         field would be clamped off a player's snapshot, it is clamped off
+         the house's too. */
+      putSnap(code, snap) {
+        if (!code) return
+        if (!board.has(code) && board.size >= BOARD_MAX) return
+        board.set(code, cleanSnap(snap, code))
+      },
+      codeTaken(code) { return board.has(code) || rooms.has(code) },
+
+      /* side -1 so roomFanout's "everyone except the sender's own side"
+         excludes nobody - a house event is for the whole room, and there
+         is no player side it could be echoing back to. */
+      fanout(code, side, msg) { roomFanout(code, side, msg) },
+
+      analyze: (prompt, mode) => analyze(prompt, mode),
+      jevDecide: (req) => jevDecide(req),
+
+      houseAddress: () => houseChain.address(),
+      chain: houseChain,
+
+      /* IS ANYONE WATCHING.
+
+         An empty on-chain cycle is not free: create, two submits, lock,
+         open and then cancel is six transactions and about 0.1 MON. A
+         floor left running overnight with nobody on it would burn through
+         the arbiter's balance and be empty by morning - which is exactly
+         when a judge opens it.
+
+         So a table only opens a REAL market when somebody has loaded the
+         floor recently. Otherwise it idles, costing nothing, and comes
+         alive within one cycle of the first visitor. Two signals, either
+         will do: the board being polled (spectate.html does that every
+         three seconds) or anyone sitting in a relay room. */
+      audience() {
+        if (Date.now() - lastBoardPoll < AUDIENCE_MS) return true
+        for (const peers of rooms.values()) if (peers.size) return true
+        return false
+      }
+    })
+  } catch (err) {
+    console.warn('[house] floor did not start: ' + err.message)
+    console.warn('[house] spectate.html will only show matches real players create')
+    House = null
+  }
+}
+
 server.listen(PORT, () => {
   const names = KEYS.map((k) => k.id.replace('GEMINI_API_KEY_', 'k')).join(' ')
   console.log('arena server   http://localhost:' + PORT + '/play.html')
@@ -1466,6 +1732,16 @@ server.listen(PORT, () => {
   const lan = lanAddresses()
   console.log('  rooms relay : on  (two machines, same 4-character code)')
   console.log('  spectating  : http://localhost:' + PORT + '/spectate.html')
+  if (House) {
+    const st = House.status()
+    const onChain = st.filter((t) => t.chain).length
+    console.log('  house floor : ' + st.length + (onChain ? ' on-chain' : ' paper') +
+      ' tables, rotating through ' + (PAIRS_COUNT * 2) + ' strategies' +
+      (onChain ? '  (each fights only once both sides are backed)'
+        : '  (no arbiter key - nothing will settle)'))
+  } else {
+    console.log('  house floor : off  (spectate shows only real player matches)')
+  }
   if (lan.length) {
     for (const a of lan) {
       console.log('  other player: http://' + a + ':' + PORT + '/play.html')

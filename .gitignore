@@ -10,7 +10,16 @@ contracts/cache/
 .env
 contracts/.env
 
+# The arbiter's seed preimages for matches it has locked but not yet
+# started. Machine-local state, not source: committing it would publish
+# one server's live commitments and mean nothing to anyone else.
+.arbiter-seeds.json
+
 # OS / Editor files
 .DS_Store
 Thumbs.db
 *.log
+
+# local key-recovery leftovers
+.env.backup-before-key-fix
+.env.recovered-key.txt

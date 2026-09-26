@@ -13,6 +13,15 @@
                          well the networking works - and the likeliest cause
                          is a Math.random() that crept into the simulation
                          instead of a seeded mulberry32 stream.
+     house-balance       the spectate floor. The server settles house
+                         matches against a fight it runs itself, so that
+                         fight has to be reproducible; and a house pair with
+                         a known winner is not something anyone should be
+                         invited to bet on. Checks both.
+     house-market        no fight starts until a backer is on each side, and
+                         a market that lapses refunds whoever did bet. Run
+                         against a fake chain, because every branch of it
+                         costs gas on the real one.
      rooms-protocol      host/join, commit-reveal ordering, tampering,
                          presence, code folding.
      rooms-rounds        the round lifecycle: the host-owned nonce,
@@ -31,6 +40,9 @@ const path = require('path')
 const ROOT = path.resolve(__dirname, '..')
 const SUITES = [
   ['fight-determinism', 'fight-determinism.test.js'],
+  ['house-balance', 'house-balance.js'],
+  ['house-market', 'house-market.test.js'],
+  ['spectate-page', 'spectate-page.test.js'],
   ['jev-advisor', 'jev-advisor.test.js'],
   ['rooms-protocol', 'rooms-protocol.test.js'],
   ['rooms-rounds', 'rooms-rounds.test.js'],

@@ -115,6 +115,21 @@
             <span id="d-status">&mdash;</span>
           </div>
 
+          <!-- What a house match is, said where the bet is placed rather
+               than in a footnote. See paintHouseNote in js/spectate.js. -->
+          <div class="d-house hidden" id="d-house">
+            <b>HOUSE MATCH</b>
+            <span id="dh-what"></span>
+            <p>
+              Seated and run by this server, so there are no two players to
+              agree on the result &mdash; the server reports it and the
+              arbiter signs that one report. The fight is the real engine on
+              a seed <code>ArenaBattle</code> produced after betting closed,
+              and the pools, the payouts and the claim are the same ones
+              every other match on this board uses.
+            </p>
+          </div>
+
           <!-- the two fighters -->
           <div class="d-fighters">
             <article class="d-fighter p1" id="d-f1">
@@ -133,6 +148,42 @@
               <code class="d-addr">&mdash;</code>
             </article>
           </div>
+
+          <!-- ============ THE FIGHT ============
+               Hidden until a fight is actually running in this room. The
+               canvas itself is NOT created on demand: js/game.js looks for
+               #arena the moment it loads and builds both fighters against
+               it, so it has to be in the document from the start. -->
+          <div class="d-fight hidden" id="fight-wrap">
+            <div class="fh" id="fight-hud">
+              <div class="fh-side fh-1">
+                <b id="fh-name1">PLAYER 1</b>
+                <div class="fh-bar"><i id="fh-hp1" style="width:100%"></i></div>
+              </div>
+              <div class="fh-clock" id="fh-clock">&mdash;</div>
+              <div class="fh-side fh-2">
+                <b id="fh-name2">PLAYER 2</b>
+                <div class="fh-bar"><i id="fh-hp2" style="width:100%"></i></div>
+              </div>
+            </div>
+            <div class="fh-stage">
+              <canvas id="arena" width="1024" height="576"></canvas>
+            </div>
+            <div class="fh-foot">
+              <span class="cap">
+                Running on this page from the seed the contract produced &mdash;
+                not a stream. Your screen reaches the result on its own.
+              </span>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-sound"
+                      aria-pressed="false">SOUND OFF</button>
+              <button type="button" class="btn btn-sm btn-ghost" id="btn-fullscreen"
+                      aria-pressed="false">FULL SCREEN</button>
+            </div>
+          </div>
+
+          <!-- Why nothing is happening yet, and what would change it.
+               Painted by paintGate() in js/spectate.js. -->
+          <p class="d-gate hidden" id="d-gate"></p>
 
           <!-- the pool -->
           <div class="d-pool">
@@ -203,6 +254,19 @@
       </section>
     </div>
 
+    <!-- ============ YOUR BETS ============
+         Every match this wallet has money in, read from the chain rather
+         than from the board - so a payout is still claimable long after
+         the match it belongs to has scrolled off the floor. -->
+    <section class="my-bets panel hidden" id="my-bets" aria-label="Your bets">
+      <div class="panel-bar">
+        <span>Your bets</span>
+        <button class="btn btn-sm btn-ghost" id="mb-refresh">REFRESH</button>
+      </div>
+      <p class="cap" id="mb-note">Connect a wallet to see the bets it has placed.</p>
+      <div id="mb-list" class="mb"></div>
+    </section>
+
     <!-- ============ HOW THE POOL PAYS ============ -->
     <section class="spec-rules" aria-label="How the pool pays">
       <h3>HOW THE POOL PAYS</h3>
@@ -263,6 +327,33 @@
 <script src="js/blockchain.js?v=5"></script>
 <script src="js/jev.js?v=17"></script>
 <script src="js/betting.js?v=5"></script>
+<script src="js/mybets.js?v=18"></script>
+
+<!-- The fight engine, exactly as play.html loads it, because a spectator
+     watches the real thing rather than a recording of it (see the header of
+     js/spectate-fight.js).
+
+     Two deliberate omissions from play.html's list:
+
+       js/ui.js      the whole cabinet - screen flow, prompt boxes, mint
+                     dialogs - none of which exists on this page. It also
+                     declares `const $`, which would collide with the `$`
+                     js/spectate.js defines and take the page down with a
+                     syntax error. spectate-fight.js supplies the three UI
+                     methods the engine actually calls.
+       js/net.js     rooms, commit-reveal, round nonces. A spectator is side
+                     0 and the relay refuses to carry anything it posts, so
+                     there is nothing here for it to do.
+
+     spectate-fight.js loads BEFORE game.js: game.js starts its render loop
+     on its last line, and the first tick calls UI.updateFightHud(). -->
+<script src="js/classes.js?v=5"></script>
+<script src="js/ai-controller.js?v=5"></script>
+<script src="js/fx.js?v=5"></script>
+<script src="js/scene3d.js?v=5"></script>
+<script src="js/spectate-fight.js?v=5"></script>
+<script src="js/game.js?v=5"></script>
+
 <script src="js/spectate.js?v=5"></script>
 </body>
 </html>

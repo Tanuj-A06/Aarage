@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(curl -sSL --max-time 25 -o three.min.js \"https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js\")",
+      "WebSearch",
+      "WebFetch(domain:quaternius.com)",
+      "Bash(curl -sSL --max-time 40 -o robot.glb \"https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/models/gltf/RobotExpressive/RobotExpressive.glb\")",
+      "Bash(curl -sSL --max-time 30 -o GLTFLoader.js \"https://raw.githubusercontent.com/mrdoob/three.js/r128/examples/js/loaders/GLTFLoader.js\")"
+    ]
+  }
+}

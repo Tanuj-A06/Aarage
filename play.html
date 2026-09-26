@@ -240,6 +240,58 @@
       </div>
     </section>
 
+    <!-- ============ THE MARKET ============
+         Between the reveal and the bell. The fight does not start until a
+         backer is on each side, so this is where two players wait and watch
+         the crowd arrive. Driven by js/chain-room.js; the server owns every
+         transaction behind it, which is why neither player needs a wallet
+         to be standing here. -->
+    <section class="screen" id="screen-market">
+      <div class="mk-stack">
+        <h2>MARKET OPEN <span id="mk-match">#&mdash;</span></h2>
+        <div class="mk-status" id="mk-status">opening a match&hellip;</div>
+
+        <div class="mk-fighters">
+          <div class="mk-f" id="mk-f1">
+            <span class="mk-seat">PLAYER 1</span>
+            <b class="mk-arch">&mdash;</b>
+            <q class="mk-prompt"></q>
+            <div class="mk-pool"><span>backed</span><b id="mk-pool-1">0 MON</b></div>
+          </div>
+          <div class="mk-vs">VS</div>
+          <div class="mk-f" id="mk-f2">
+            <span class="mk-seat">PLAYER 2</span>
+            <b class="mk-arch">&mdash;</b>
+            <q class="mk-prompt"></q>
+            <div class="mk-pool"><span>backed</span><b id="mk-pool-2">0 MON</b></div>
+          </div>
+        </div>
+
+        <div class="mk-bar"><i id="mk-bar-1"></i><i id="mk-bar-2"></i></div>
+
+        <p class="mk-need" id="mk-need">
+          This fight starts when at least one person backs each fighter.
+        </p>
+
+        <div class="mk-clockrow">
+          <span>betting closes in</span>
+          <b id="mk-clock">&mdash;</b>
+        </div>
+
+        <div class="mk-share">
+          <span>Send this to anyone who should bet:</span>
+          <a id="mk-link" href="#" target="_blank" rel="noopener">&mdash;</a>
+        </div>
+
+        <p class="mk-fine">
+          Neither of you needs a wallet: every transaction is the arbiter's, and
+          there are no player stakes &mdash; the betting pool is the only money in
+          the match. If the window closes with a side unbacked, everyone who did
+          bet is refunded and a fresh market opens.
+        </p>
+      </div>
+    </section>
+
     <!-- ============ WINNER ============ -->
     <section class="screen" id="screen-winner">
       <div class="win-stack">
@@ -339,6 +391,9 @@
      Strictly after ui.js. rooms.js wraps six UI methods rather than editing
      them, so UI must exist and have run its init by the time it loads. -->
 <script src="js/net.js?v=16"></script>
+<!-- After net.js (it hooks Net.onServerEvent through rooms.js) and before
+     rooms.js, which calls into it from the beginFight gate. -->
+<script src="js/chain-room.js?v=18"></script>
 <!-- Puts the room on the public board at /spectate.html. Strictly between
      net.js and rooms.js: it reads Net, and rooms.js drives it. -->
 <script src="js/arena-feed.js?v=16"></script>

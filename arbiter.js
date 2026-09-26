@@ -50,6 +50,13 @@
 ------------------------------------------------------------------- */
 
 const crypto = require('crypto')
+const fs = require('fs')
+const path = require('path')
+
+/* Receipt lookups on the public Monad endpoint fail intermittently with an
+   internal "Archive error" - the transaction is fine, the RPC is not. See
+   house/txwait.js for why tx.wait() is not used directly on this path. */
+const { confirmTx } = require('./house/txwait.js')
 
 let ethers = null
 try {
@@ -76,7 +83,32 @@ const Arbiter = {
   MAX_MATCHES: 500,
 
   init() {
-    const key = process.env.ARBITER_PRIVATE_KEY
+    /* Cleaned, not trusted as typed.
+
+       This value gets pasted into a hosting dashboard, and every way that
+       goes wrong is invisible in the field while being fatal to ethers -
+       after which the server drops to paper mode and every market on it is
+       imaginary. The failure is silent and expensive, so the parser is
+       deliberately forgiving about the four mistakes people actually make:
+
+         "0xabc…\n"                    a trailing newline from the paste
+         " 0xabc… "                    stray whitespace
+         "\"0xabc…\""                  quotes carried from a .env line
+         "ARBITER_PRIVATE_KEY=0xabc…"  the whole line pasted into the
+                                       VALUE field, name and all
+         "0xabc… privatekey"           a trailing note pasted with it
+
+       None of these is ambiguous, so accepting them costs nothing. A
+       missing 0x needs no handling - ethers takes bare hex already. */
+    const key = String(process.env.ARBITER_PRIVATE_KEY || '')
+      .trim()
+      /* The whole `NAME=value` line pasted into the value box. */
+      .replace(/^\s*ARBITER_PRIVATE_KEY\s*=\s*/i, '')
+      .replace(/^["']|["']$/g, '')
+      /* Anything after the key itself - a comment, a label, a second
+         value - is not part of it. Take the first token. */
+      .split(/\s+/)[0]
+      .trim()
     if (!ethers) {
       console.warn('[arbiter] ethers not installed - settlement signing disabled')
       return false
@@ -85,14 +117,33 @@ const Arbiter = {
       console.warn('[arbiter] no ARBITER_PRIVATE_KEY in .env - settlement signing disabled')
       return false
     }
+    /* ONLY the key parse is inside this try. Anything else in here would be
+       reported to the operator as "your key is wrong", which is the most
+       expensive wrong answer this file can give: it sends someone hunting
+       through their secrets while the actual fault is somewhere else
+       entirely. It cost an hour once already.
+
+       The message also says WHAT is wrong with the key, because the usual
+       cause is a truncated paste and a length is the fastest way to see it. */
     try {
       this.wallet = new ethers.Wallet(key)
-      console.info('[arbiter] settlement signer ready: ' + this.wallet.address)
-      return true
     } catch (e) {
+      const k = String(key).trim()
+      const body = k.replace(/^0x/, '')
       console.warn('[arbiter] ARBITER_PRIVATE_KEY is not a valid key - signing disabled')
+      console.warn('[arbiter]   got ' + body.length + ' hex characters, expected 64' +
+        (/^[0-9a-fA-F]*$/.test(body) ? '' : ' (and it contains non-hex characters)'))
       return false
     }
+
+    console.info('[arbiter] settlement signer ready: ' + this.wallet.address)
+
+    /* Before anything can ask for a seed: a match locked by the previous run
+       of this process is only startable if its preimage comes back. Its own
+       failures are handled inside it and must never be mistaken for a bad
+       key. */
+    this._restore()
+    return true
   },
 
   enabled() {
@@ -196,15 +247,34 @@ const Arbiter = {
      refuses in words rather than throwing.
   ------------------------------------------------------------------- */
 
+  /* One contract per arena address, cached for the life of the process.
+
+     This used to build a fresh JsonRpcProvider on every call. Each one
+     carries its own background poller and is never released, so a server
+     that drives matches all day accumulates hundreds of clients against one
+     public RPC and eventually starts losing the transactions that matter -
+     a match stuck in BettingOpen because closeBetting quietly never landed.
+     Nothing about that symptom points at provider churn, which is exactly
+     why it is worth the comment. */
+  _arenas: new Map(),
+
   arena(arenaAddress) {
     if (!this.wallet) throw new Error('arbiter is not configured')
     if (!arenaAddress || !/^0x[0-9a-fA-F]{40}$/.test(arenaAddress)) {
       throw new Error('no arena address configured')
     }
+    const key = arenaAddress.toLowerCase()
+    if (this._arenas.has(key)) return this._arenas.get(key)
+
     const rpc = process.env.MONAD_RPC || 'https://testnet-rpc.monad.xyz'
-    const provider = new ethers.JsonRpcProvider(rpc)
+    const chainId = Number(process.env.MONAD_CHAIN_ID || 10143)
+    /* staticNetwork: the chain id is fixed, so ethers must not spend a round
+       trip re-detecting it before every call. */
+    const provider = new ethers.JsonRpcProvider(rpc, chainId, { staticNetwork: true })
     const signer = this.wallet.connect(provider)
-    return new ethers.Contract(arenaAddress, ARENA_ABI, signer)
+    const c = new ethers.Contract(arenaAddress, ARENA_ABI, signer)
+    this._arenas.set(key, c)
+    return c
   },
 
   /* Freeze the agents and commit to the seed in one transaction, then open
@@ -215,10 +285,10 @@ const Arbiter = {
     const { commit } = this.commitSeed(matchId)
 
     const lock = await arena.lockAgents(matchId, commit)
-    await lock.wait()
+    await confirmTx(lock)
 
     const open = await arena.openBetting(matchId, windowSeconds || 120)
-    const r = await open.wait()
+    const r = await confirmTx(open)
 
     return { commit, lockTx: lock.hash, openTx: r.hash }
   },
@@ -232,7 +302,7 @@ const Arbiter = {
     if (!rec || !rec.preimage) throw new Error('no seed committed for match ' + matchId)
 
     const tx = await arena.startMatch(matchId, rec.preimage)
-    const r = await tx.wait()
+    const r = await confirmTx(tx)
 
     const m = await arena.getMatch(matchId)
     return { txHash: r.hash, seed: m.seed.toString() }
@@ -329,6 +399,89 @@ const Arbiter = {
       const oldest = this.matches.keys().next().value
       this.matches.delete(oldest)
     }
+    this._persist()
+  },
+
+  /* ------------------------------------------------------------------
+     The seed preimages, on disk.
+
+     WHY THIS IS NOT OPTIONAL
+
+     lockAgents commits to a seed; startMatch reveals the preimage. Only
+     this process knows it, and until now only in memory - so a restart
+     between those two calls left a funded market that could NEVER start.
+     The money was never lost (cancelMatch and voidMatch are permissionless
+     after their timeouts) but the match was dead, and on a demo server that
+     gets restarted between runs that is not a rare edge case, it is
+     Tuesday.
+
+     WHAT IS SAFE TO WRITE DOWN
+
+     A preimage is only sensitive BEFORE it is revealed, and its whole
+     purpose is to be revealed at startMatch. Knowing it early would let
+     someone predict the seed - but the contract mixes it with
+     blockhash(closedAtBlock) and the final pools, neither of which exists
+     when the commitment is made, so even the arbiter cannot aim a fight
+     with it. The file sits next to ARBITER_PRIVATE_KEY in .env, which is
+     strictly more dangerous; anyone who can read one can read the other.
+
+     Results and signatures are deliberately NOT persisted. They are
+     recoverable from the contract and from re-running the fight, and a
+     stale signed result surviving a restart is a way to settle a match
+     twice.
+  ------------------------------------------------------------------- */
+  STORE: path.join(__dirname, '.arbiter-seeds.json'),
+
+  _persist() {
+    if (!this._dirty) {
+      /* Coalesce: _remember is called several times per match and this file
+         is tiny, but a synchronous write per call on a busy floor is still
+         a write per call. */
+      this._dirty = true
+      setTimeout(() => this._flush(), 250).unref?.()
+    }
+  },
+
+  _flush() {
+    this._dirty = false
+    try {
+      const out = {}
+      for (const [id, rec] of this.matches) {
+        if (rec && rec.preimage) {
+          out[id] = { preimage: rec.preimage.toString(), commit: rec.commit }
+        }
+      }
+      fs.writeFileSync(this.STORE, JSON.stringify(out), { mode: 0o600 })
+    } catch (e) {
+      /* A floor that cannot write its seeds still runs; it just cannot
+         survive a restart mid-match. Said once, loudly, not per match. */
+      if (!this._warned) {
+        this._warned = true
+        console.warn('[arbiter] could not persist seed commitments (' + e.message +
+          ') - a restart mid-match would strand those matches')
+      }
+    }
+  },
+
+  _restore() {
+    let raw = null
+    try {
+      if (!fs.existsSync(this.STORE)) return
+      raw = JSON.parse(fs.readFileSync(this.STORE, 'utf8'))
+    } catch (e) {
+      console.warn('[arbiter] seed store unreadable (' + e.message + ') - ignoring it')
+      return
+    }
+    let n = 0
+    for (const id of Object.keys(raw || {})) {
+      const r = raw[id]
+      if (!r || !r.preimage) continue
+      try {
+        this.matches.set(id, { preimage: BigInt(r.preimage), commit: r.commit, results: {} })
+        n++
+      } catch (e) { /* a corrupt row is skipped, not fatal */ }
+    }
+    if (n) console.info('[arbiter] restored ' + n + ' seed commitment' + (n === 1 ? '' : 's'))
   }
 }
 

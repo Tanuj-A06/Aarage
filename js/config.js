@@ -250,18 +250,33 @@ const MONAD = {
   /* Flipped to true once arenaAddress/nftAddress below are real. Until then
      every chain path is labelled DEMO in the UI and nothing claims to have
      touched Monad - see blockchain.js. */
-  USE_REAL_CHAIN: false,
+  USE_REAL_CHAIN: true,
 
   chainIdHex: '0x279f',              // 10143 (Monad Testnet)
   chainIdDec: 10143,
   chainName: 'Monad Testnet',
-  rpcUrls: ['https://testnet-rpc.monad.xyz'],
+  /* More than one, in preference order, because a single public endpoint
+     is a single point of failure for every number on the page. When the
+     first one rate-limits or 4xxs, js/betting.js rotates to the next
+     rather than reporting the pools as unknown.
+
+     The first entry is also what gets handed to MetaMask in
+     wallet_addEthereumChain, so it should stay the canonical one.
+
+     Both were checked with a real eth_call against the deployed
+     ArenaBattle, not just eth_chainId - an endpoint can answer the second
+     and refuse the first, which is how a fallback ends up being no
+     fallback at all. */
+  rpcUrls: [
+    'https://testnet-rpc.monad.xyz',
+    'https://rpc.ankr.com/monad_testnet'
+  ],
   blockExplorerUrls: ['https://testnet.monadexplorer.com'],
   nativeCurrency: { name: 'MON', symbol: 'MON', decimals: 18 },
 
   // Filled in by contracts/scripts/deploy.js output.
-  arenaAddress: '0x0000000000000000000000000000000000000000',
-  nftAddress: '0x0000000000000000000000000000000000000000',
+  arenaAddress: '0x0329D1A516e9F5f8a89B48C4AD0515884f0652a5',
+  nftAddress: '0xD12205ea18E336F2a4995Cc0Ef6226efaC48639F',
 
   /* The rules version of the deterministic engine. The contract refuses an
      agent or a settlement built against a different one, so bumping this
@@ -271,7 +286,13 @@ const MONAD = {
 
   FEE_BPS: 500,                      // mirrors the contract default
   defaultBet: '0.05',
-  BETTING_WINDOW: 120,               // seconds the market stays open
+  /* Seconds the market stays open. Only used by the legacy arena screen
+     (js/arena.js), where the browser opens its own match. A room fight's
+     window is set by the SERVER, which owns the market now and has to,
+     because the fight does not start until a backer is on each side and
+     only the server can read the pools - see WINDOW_SECONDS in
+     house/rooms-chain.js and house/director.js. */
+  BETTING_WINDOW: 120,
 
   SIDE_A: 1,
   SIDE_B: 2,

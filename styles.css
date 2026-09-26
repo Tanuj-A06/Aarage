@@ -986,3 +986,154 @@ body.mode-hexgl #mute { display: none; }
   .agent-vs { justify-content: center; padding: 4px 0; }
   .pool-grid { grid-template-columns: repeat(2, 1fr); }
 }
+
+/* ==================================================================
+   THE MARKET SCREEN  (#screen-market)
+
+   Between the reveal and the bell. Two players stand here watching the
+   crowd arrive, because the fight does not start until a backer is on
+   each side. See js/chain-room.js.
+   ================================================================== */
+
+.mk-stack {
+  max-width: 880px;
+  margin: 0 auto;
+  padding: 28px 24px;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  text-align: center;
+}
+
+.mk-stack h2 {
+  font-family: 'Archivo Black', system-ui, sans-serif;
+  font-size: clamp(22px, 4vw, 34px);
+  letter-spacing: 0.02em;
+  margin: 0;
+}
+.mk-stack h2 span { color: var(--gold, #ffd24a); }
+
+.mk-status {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 13px;
+  opacity: 0.85;
+  min-height: 1.2em;
+}
+.mk-status.ok  { color: #6ef2a6; opacity: 1; }
+.mk-status.warn { color: #ffd24a; opacity: 1; }
+.mk-status.bad { color: #ff5d6c; opacity: 1; }
+
+.mk-fighters {
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  gap: 14px;
+  align-items: stretch;
+  text-align: left;
+}
+.mk-f {
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+}
+.mk-seat {
+  font-family: 'Barlow Condensed', system-ui, sans-serif;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  opacity: 0.6;
+}
+.mk-arch {
+  font-family: 'Archivo Black', system-ui, sans-serif;
+  font-size: 19px;
+  line-height: 1.1;
+}
+.mk-prompt {
+  font-size: 12.5px;
+  line-height: 1.5;
+  opacity: 0.78;
+  font-style: italic;
+  min-height: 3.2em;
+}
+.mk-pool {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  border-top: 1px solid rgba(255, 255, 255, 0.10);
+  padding-top: 8px;
+  margin-top: auto;
+}
+.mk-pool span { font-size: 11px; letter-spacing: 0.10em; opacity: 0.55; }
+.mk-pool b { font-family: 'JetBrains Mono', ui-monospace, monospace; font-size: 15px; }
+
+.mk-vs {
+  align-self: center;
+  font-family: 'Archivo Black', system-ui, sans-serif;
+  opacity: 0.35;
+}
+
+/* One bar, two pools. Zero-width on a side is exactly the thing the
+   player is waiting to stop being true, so it is left visibly empty
+   rather than given a minimum. */
+.mk-bar {
+  display: flex;
+  height: 8px;
+  background: rgba(127, 127, 127, 0.20);
+  overflow: hidden;
+}
+.mk-bar i { display: block; height: 100%; }
+#mk-bar-1 { background: #ff5d6c; }
+#mk-bar-2 { background: #4fd0ff; }
+
+.mk-need {
+  margin: 0;
+  font-size: 13.5px;
+  line-height: 1.55;
+  opacity: 0.85;
+}
+.mk-need.ok { color: #6ef2a6; }
+.mk-need.warn { color: #ffd24a; }
+
+.mk-clockrow {
+  display: flex;
+  gap: 10px;
+  align-items: baseline;
+  justify-content: center;
+  font-size: 12px;
+  letter-spacing: 0.10em;
+  opacity: 0.7;
+}
+.mk-clockrow b {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 22px;
+  opacity: 1;
+}
+
+.mk-share {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  opacity: 0.8;
+}
+.mk-share a {
+  font-family: 'JetBrains Mono', ui-monospace, monospace;
+  font-size: 12.5px;
+  color: var(--gold, #ffd24a);
+  word-break: break-all;
+}
+
+.mk-fine {
+  margin: 0;
+  font-size: 11.5px;
+  line-height: 1.6;
+  opacity: 0.55;
+  max-width: 62ch;
+  margin-inline: auto;
+}
+
+@media (max-width: 680px) {
+  .mk-fighters { grid-template-columns: 1fr; }
+  .mk-vs { display: none; }
+}

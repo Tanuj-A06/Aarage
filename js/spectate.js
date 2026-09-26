@@ -46,6 +46,11 @@ const Spectate = {
     this.paintStatus()
     this.bindStatus()
     this.bindBet()
+    /* Without this the fight runs but nobody sees it: SpectateFight caches
+       #fight-wrap here, and every show/hide is guarded on having found it,
+       so an unmounted module fails silently and completely. */
+    if (typeof SpectateFight !== 'undefined') SpectateFight.mount()
+    if (typeof MyBets !== 'undefined') MyBets.init()
 
     this.pollBoard()
     setInterval(() => this.pollBoard(), this.LIST_MS)
@@ -68,6 +73,8 @@ const Spectate = {
         await Chain.connectWallet()
         this.paintStatus()
         this.paintDetail()
+        /* A wallet is the only thing the bets list was waiting for. */
+        if (typeof MyBets !== 'undefined') MyBets.refresh()
       } catch (err) {
         this.note(err && err.message ? err.message : 'Wallet connection refused')
       }
@@ -184,7 +191,11 @@ const Spectate = {
     /* textContent throughout: every one of these came off the wire from a
        player-authored prompt box. */
     el.querySelector('.mr-code').textContent = m.code
-    el.querySelector('.mr-mode').textContent = MODE_LABEL[m.mode] || m.mode
+    /* A house match says so on the row, not only once you open it. The
+       whole point of the label is that nobody has to go looking for it. */
+    el.querySelector('.mr-mode').textContent =
+      (m.house ? 'HOUSE · ' : '') + (MODE_LABEL[m.mode] || m.mode)
+    if (m.house) el.classList.add('is-house')
     el.querySelector('.mr-status').textContent = STATUS_LABEL[m.status] || m.status
     el.querySelector('.mr-a1').textContent = a1
     el.querySelector('.mr-a2').textContent = a2
@@ -207,6 +218,9 @@ const Spectate = {
 
   select(code) {
     if (this.code === code) return
+    /* Whatever was on the canvas belonged to the room we are leaving. */
+    if (typeof SpectateFight !== 'undefined') SpectateFight.stop()
+
     this.code = code
     this.snap = this.matches.filter((m) => m.code === code)[0] || null
     this.onchain = null
@@ -221,6 +235,7 @@ const Spectate = {
     this.paintDetail()
     this.watch(code)
     this.pollChain()
+    this.catchUpFight(code)
   },
 
   /* ---------------- the live stream ---------------- */
@@ -279,8 +294,139 @@ const Spectate = {
       case 'bye':
         this.log('player ' + m.from + ' left the room', 'bad')
         break
+
+      /* ---- the house floor (house/director.js) ---- */
+
+      /* Everything needed to RUN the fight, and deliberately not its
+         result: this screen reaches the verdict by running the engine, the
+         same way the server did. See js/spectate-fight.js. */
+      case 'house-fight':
+        if (typeof SpectateFight === 'undefined') break
+        this.log('fight starting - running it on this page', 'ok')
+        SpectateFight.run(this.code, m, {
+          onDone: (who) => {
+            this.log('this screen has it: ' + (who === 'p1' ? 'PLAYER 1' : 'PLAYER 2'), 'ok')
+            /* The board's settled result lands separately, and that is the
+               point - two independent answers to the same question. */
+            this.refresh()
+            this.pollChain()
+          }
+        })
+        break
+
+      case 'house-phase':
+        this.logHousePhase(m)
+        break
+
+      /* ---- the market, for a room the server runs (house or player) ---- */
+
+      case 'chain':
+        this.log('match #' + m.matchId + ' open on ' + MONAD.chainName +
+          (m.reopened ? ' (the last market got no backers)' : ''), 'ok')
+        this.refresh()
+        this.pollChain()
+        break
+
+      /* The pools, straight off the contract, pushed as they move. The page
+         still READS its own numbers from the chain on its own clock - this
+         only removes the wait for the next poll, and tells the spectator
+         the one thing the pools alone do not say: that this fight is being
+         held until both sides are backed. */
+      case 'chain-status':
+        this.gate = {
+          matchId: m.matchId | 0,
+          backed: !!m.backed,
+          emptyA: String(m.poolA) === '0',
+          emptyB: String(m.poolB) === '0',
+          closesAt: m.closesAt | 0
+        }
+        this.paintGate()
+        break
+
+      case 'chain-abandoned':
+        this.gate = null
+        this.paintGate()
+        this.log('nobody backed both sides — match #' + m.matchId +
+          ' cancelled, every bet on it is refundable', 'warn')
+        if (typeof MyBets !== 'undefined') MyBets.refresh()
+        break
+
+      /* A player room's bell. Same payload shape as a house fight minus the
+         playbooks, and the same rule: no winner in it. */
+      case 'chain-start':
+        if (typeof SpectateFight === 'undefined') break
+        this.gate = null
+        this.paintGate()
+        this.log('both sides backed — the fight is on', 'ok')
+        /* forced: this event is the start, and the board has not caught up */
+        this.catchUpFight(this.code, true)
+        break
+
+      case 'chain-settled':
+        this.log('settled on ' + MONAD.chainName + ' — ' +
+          (m.winner === 'p1' ? 'PLAYER 1' : 'PLAYER 2') + ' took the pool', 'ok')
+        this.pollChain()
+        if (typeof MyBets !== 'undefined') MyBets.refresh()
+        break
+
+      case 'chain-dispute':
+        this.log('the two cabinets reported different fights — not settled. ' +
+          'Every bet is refundable once the contract times out.', 'bad')
+        this.pollChain()
+        break
       /* ping/pong is the players' heartbeat and says nothing a spectator
          needs; logging it would bury the real events one a second. */
+    }
+  },
+
+  logHousePhase(m) {
+    const said = {
+      lobby: 'house table opening',
+      writing: 'both strategies being written - prompts stay sealed',
+      betting: 'strategies are public, the market is open',
+      done: 'settled'
+    }
+    if (said[m.phase]) this.log(said[m.phase], m.phase === 'betting' ? 'ok' : '')
+  },
+
+  /* A tab that opened after the fight started missed the relay event that
+     carried it. The board says a fight is running but cannot say WHICH -
+     the seed and the frozen playbooks are not board fields - so the one
+     thing a late spectator cannot reconstruct is fetched directly, and
+     js/spectate-fight.js steps it forward to the frame everyone else is on.
+
+     No longer gated on snap.house: player rooms are server-run too now
+     (house/rooms-chain.js), so they have a fight to hand out exactly as a
+     house table does, and a spectator should not have to care which kind
+     they opened.
+
+     It IS gated on the match being live, though, and that matters for more
+     than tidiness. Asking for a fight in a room that has none answers 404 -
+     correctly - but a fetch that 404s is logged to the browser console by
+     the browser itself, no matter how carefully the caller handles it. Ask
+     on every selection and the console fills with red for a page that is
+     working perfectly, which is how a real error later goes unnoticed. */
+  async catchUpFight(code, force) {
+    if (typeof SpectateFight === 'undefined') return
+    if (SpectateFight.active && SpectateFight.code === code) return
+    /* `force` is for the relay: a chain-start event IS the fight starting,
+       and it arrives instantly, while the board it would be checked against
+       is on a three-second poll and still says "ready". Gating the relay on
+       stale board state would mean the fight never appears for the people
+       watching it live - the exact case this function exists for. */
+    if (!force) {
+      const s = this.snap
+      if (!s || s.status !== 'live') return
+    }
+    try {
+      const r = await fetch('/api/house/fight?code=' + encodeURIComponent(code), { cache: 'no-store' })
+      const d = await r.json()
+      if (!d || !d.ok || this.code !== code) return
+      SpectateFight.run(code, d.fight, {
+        onDone: () => { this.refresh(); this.pollChain() }
+      })
+    } catch (e) {
+      /* Not fatal - the board still carries the result when it lands. */
     }
   },
 
@@ -405,6 +551,9 @@ const Spectate = {
       (s.winner ? ' — ' + (s.winner === 'p1' ? 'PLAYER 1' : 'PLAYER 2') + ' WON' : '')
     st.className = 's-' + s.status
 
+    this.paintHouseNote(s)
+    this.paintGate()
+
     this.paintFighter(1, s.p1, s.winner === 'p1', s.winner === 'p2')
     this.paintFighter(2, s.p2, s.winner === 'p2', s.winner === 'p1')
 
@@ -414,6 +563,55 @@ const Spectate = {
     this.paintPool()
     this.paintQuote()
     this.paintMine()
+  },
+
+  /* THE LABEL.
+
+     A house match is run and reported by the server, so it cannot offer the
+     one guarantee a player match can: that two independent machines watched
+     the same fight and agreed before anything was signed. The bets and the
+     payouts are as real as any other match on this board, and the fight is
+     the real engine on a seed the contract produced - but the difference is
+     stated here, in the panel where the bet is placed, rather than left for
+     someone to work out. */
+  paintHouseNote(s) {
+    const el = $('#d-house')
+    if (!el) return
+    el.classList.toggle('hidden', !s.house)
+    if (!s.house) return
+    const what = $('#dh-what')
+    if (what) what.textContent = s.houseNote || ''
+  },
+
+  /* THE GATE, on the spectator's side.
+
+     No fight on this server starts until a backer is on each side. For the
+     crowd that is not a restriction, it is the call to action: the reason
+     nothing is happening is that one of these two fighters has nobody on
+     them, and the person reading this can be that somebody. */
+  paintGate() {
+    const el = $('#d-gate')
+    if (!el) return
+    const g = this.gate
+    const relevant = g && this.snap && g.matchId &&
+      g.matchId === this.snap.chain.matchId && this.snap.status === 'ready'
+    el.classList.toggle('hidden', !relevant)
+    if (!relevant) return
+
+    const n1 = (this.snap.p1.archetype || 'PLAYER 1')
+    const n2 = (this.snap.p2.archetype || 'PLAYER 2')
+    if (g.backed) {
+      el.textContent = 'Both fighters are backed. The fight starts when the betting window closes.'
+      el.className = 'd-gate ok'
+    } else if (g.emptyA && g.emptyB) {
+      el.textContent = 'Nobody has bet on this match. It will not start until at least one ' +
+        'person backs each fighter — a pari-mutuel with one side empty pays nobody.'
+      el.className = 'd-gate'
+    } else {
+      el.textContent = 'Waiting for a backer on ' + (g.emptyA ? n1 : n2) +
+        '. Back them and the fight starts.'
+      el.className = 'd-gate warn'
+    }
   },
 
   paintFighter(n, f, won, lost) {
@@ -624,7 +822,21 @@ const Spectate = {
     if (mine.p2 > 0n) parts.push(fmtMon(mine.p2) + ' MON on player 2')
     $('#dm-pos').textContent = parts.join('  ·  ')
 
-    const settled = this.onchain ? this.onchain.status === 3 : !!(this.snap && this.snap.winner)
+    /* WHEN THERE IS SOMETHING TO CLAIM.
+
+       This read `this.onchain.status === 3`, and both halves were wrong:
+       readMatch() returns `state` and `stateName`, never `status`, so the
+       comparison was `undefined === 3` - permanently false. The CLAIM
+       button therefore never appeared on an on-chain match, and a winner
+       had no way to be paid from this panel. And 3 is betting_open anyway;
+       settled is 6.
+
+       A cancelled or voided market counts too. To a bettor those mean the
+       same thing as a win: money sitting in the contract with their name on
+       it. `refundable` is exactly that test. */
+    const settled = this.onchain
+      ? (this.onchain.stateName === 'settled' || this.onchain.refundable)
+      : !!(this.snap && this.snap.winner)
     const owedRow = $('#dm-owed-row')
     const btn = $('#btn-claim')
 

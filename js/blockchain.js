@@ -197,7 +197,14 @@ const Chain = {
       model: String(agent.model || (typeof JEV !== 'undefined' ? JEV.modelId() : 'local')).slice(0, 64),
       modelVersion: String(agent.modelVersion || (typeof JEV !== 'undefined' ? JEV.modelVersion : 'builtin')).slice(0, 64),
       archetype: String(agent.archetype || 'Brawler').slice(0, 32),
-      jevConfigHash: typeof JEV !== 'undefined' ? JEV.configHash() : ethers.ZeroHash,
+      /* Padded, not passed straight through: JEV.configHash() is a 32-BIT
+         fold ('0x' + 8 hex characters, see js/jev.js) and this struct field
+         is bytes32. ethers refuses a short value rather than padding it
+         itself, so the unpadded version made submitAgent throw before it
+         ever reached the chain - which took the whole match with it. */
+      jevConfigHash: typeof JEV !== 'undefined'
+        ? ethers.zeroPadValue(JEV.configHash(), 32)
+        : ethers.ZeroHash,
       aggression: Math.round(clamp01(agent.stats.aggression) * 100),
       defense: Math.round(clamp01(agent.stats.defense) * 100),
       speed: Math.round(clamp01(agent.stats.speed) * 100),

@@ -77,18 +77,50 @@ const Bets = {
      belongs at the moment they try to spend, not the moment they look. So
      reads go over the public RPC and only writes go through the signer. */
   _ro: null,
+  _rpc: 0,          // which of MONAD.rpcUrls we are currently reading through
+
+  /* NEVER the wallet's provider.
+
+     This used to prefer Chain.provider when a wallet was connected, which
+     quietly contradicted the paragraph above: a BrowserProvider forwards
+     every call to whatever RPC the user happens to have saved for this
+     network in MetaMask. Plenty of those entries are dead or rate-limited,
+     and when one is, the console fills with
+
+         MetaMask - RPC Error: RPC endpoint returned HTTP client error
+         code: -32080
+
+     while the page decides the match is not on chain at all - because
+     readMatch() returned null and the ledger fell back to paper. The
+     symptom looks like a broken contract and is actually a browser setting
+     we had no reason to depend on.
+
+     Reads go through an endpoint WE choose. The wallet is for signing. */
   readContract() {
     if (!this.configured() || typeof ethers === 'undefined') return null
     if (this._ro) return this._ro
-    let provider = null
     try {
-      if (Chain.provider) provider = Chain.provider
-      else provider = new ethers.JsonRpcProvider(MONAD.rpcUrls[0], MONAD.chainIdDec)
+      const url = MONAD.rpcUrls[this._rpc] || MONAD.rpcUrls[0]
+      /* staticNetwork: the chain id is known, so ethers must not spend a
+         round trip re-detecting it before every single call. */
+      const provider = new ethers.JsonRpcProvider(url, MONAD.chainIdDec, { staticNetwork: true })
+      this._ro = new ethers.Contract(MONAD.arenaAddress, MONAD.ARENA_ABI, provider)
     } catch (e) {
       return null
     }
-    this._ro = new ethers.Contract(MONAD.arenaAddress, MONAD.ARENA_ABI, provider)
     return this._ro
+  },
+
+  /* Move to the next endpoint and rebuild. Called by a read that failed, so
+     the next attempt lands somewhere else rather than retrying into the
+     same rate limit. Returns false once every endpoint has been tried, so a
+     caller can stop instead of cycling forever. */
+  rotateRpc() {
+    if (!MONAD.rpcUrls || MONAD.rpcUrls.length < 2) return false
+    this._rpc = (this._rpc + 1) % MONAD.rpcUrls.length
+    this._ro = null
+    console.warn('[bets] RPC failed, switching to ' + MONAD.rpcUrls[this._rpc])
+    return this._rpc !== 0
   },
 
   async writeContract() {
@@ -167,16 +199,33 @@ const Bets = {
      too - the prompt rendered next to a bet button is the prompt the
      contract is holding, not one the relay reported. */
   async readMatch(matchId) {
-    const c = this.readContract()
-    if (!c || !matchId) return null
+    if (!matchId) return null
     let m, a, b
-    try {
-      m = await c.getMatch(matchId)
-      a = await c.getAgent(matchId, MONAD.SIDE_A)
-      b = await c.getAgent(matchId, MONAD.SIDE_B)
-    } catch (e) {
-      return null
+
+    /* One retry per endpoint. This single read decides whether the page
+       believes a match is on chain at all - a null here is what makes the
+       UI announce that a real, funded match "has not staked on chain yet"
+       and start taking paper bets. Worth trying somewhere else before
+       accepting that answer.
+
+       Three calls in parallel rather than in series: they are independent,
+       and the page runs this on a six-second poll. */
+    for (let attempt = 0; attempt < (MONAD.rpcUrls || []).length; attempt++) {
+      const c = this.readContract()
+      if (!c) return null
+      try {
+        ;[m, a, b] = await Promise.all([
+          c.getMatch(matchId),
+          c.getAgent(matchId, MONAD.SIDE_A),
+          c.getAgent(matchId, MONAD.SIDE_B)
+        ])
+        break
+      } catch (e) {
+        m = null
+        if (!this.rotateRpc()) break
+      }
     }
+    if (!m) return null
 
     const state = Number(m.state)
     const poolA = BigInt(m.poolA)

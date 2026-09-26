@@ -5,6 +5,11 @@
    Run:  node scripts/set-arbiter.js              (show what would change)
          node scripts/set-arbiter.js --apply      (actually send it)
          node scripts/set-arbiter.js --apply --gas 2    (also fund the arbiter)
+         node scripts/set-arbiter.js --apply --to 0xABC... --gas 2
+
+   --to names the target arbiter by ADDRESS instead of deriving it from the
+   private key in .env. Use it when the owner key and the arbiter key are on
+   different machines - the owner never needs a copy of the arbiter's key.
 
    WHY THIS EXISTS
 
@@ -61,9 +66,28 @@ async function main() {
   if (!fs.existsSync(dep)) fail('No contracts/deployments.10143.json - deploy first.')
   const d = JSON.parse(fs.readFileSync(dep, 'utf8'))
 
-  const arbKey = keyFrom('.env', 'ARBITER_PRIVATE_KEY')
-  if (!arbKey) fail('No ARBITER_PRIVATE_KEY in .env - run node scripts/make-keys.js')
-  const wantArbiter = new ethers.Wallet(arbKey).address
+  /* --to lets whoever holds the OWNER key name the target arbiter by
+     address. That matters whenever the owner and the arbiter live on
+     different machines, which is the normal case: the person who deployed
+     should never need a copy of the key the server signs with, and asking
+     for one to run a one-line admin call would be a bad habit to build. */
+  const toArg = process.argv.indexOf('--to')
+  let wantArbiter
+  if (toArg > -1) {
+    const v = process.argv[toArg + 1]
+    if (!v || !/^0x[0-9a-fA-F]{40}$/.test(v)) fail('--to needs a 0x address')
+    wantArbiter = ethers.getAddress(v)
+  } else {
+    const arbKey = keyFrom('.env', 'ARBITER_PRIVATE_KEY')
+    if (!arbKey) {
+      fail([
+        'No ARBITER_PRIVATE_KEY in .env, and no --to given.',
+        '  Either run node scripts/make-keys.js, or name the target directly:',
+        '      node scripts/set-arbiter.js --apply --to 0x... --gas 2'
+      ].join('\n  '))
+    }
+    wantArbiter = new ethers.Wallet(arbKey).address
+  }
 
   const ownerKey = keyFrom('contracts/.env', 'DEPLOYER_PRIVATE_KEY')
   const provider = new ethers.JsonRpcProvider(RPC)
@@ -76,7 +100,8 @@ async function main() {
   console.log('  arena            ' + d.arenaAddress)
   console.log('  arena.owner      ' + onChainOwner)
   console.log('  arena.arbiter    ' + onChainArbiter)
-  console.log('  server.js signs  ' + wantArbiter + '   (' + ethers.formatEther(arbBal) + ' MON)')
+  console.log('  target arbiter   ' + wantArbiter + '   (' + ethers.formatEther(arbBal) + ' MON)' +
+    (toArg > -1 ? '   [--to]' : '   [from .env]'))
   console.log('')
 
   const needsSet = onChainArbiter.toLowerCase() !== wantArbiter.toLowerCase()

@@ -257,7 +257,14 @@ const Rooms = {
 
     Net.onRematch = (seed) => {
       this._remoteStart = true
-      UI.beginFight(UI.parsed[1], UI.parsed[2], seed)
+      this.startUngated(UI.parsed[1], UI.parsed[2], seed)
+    }
+
+    /* Everything the server says about this room's market. Routed here
+       rather than into the presence logic - see the `from: 0` guard in
+       js/net.js. */
+    Net.onServerEvent = (m) => {
+      if (typeof ChainRoom !== 'undefined') ChainRoom.onServerEvent(m)
     }
   },
 
@@ -670,8 +677,35 @@ const Rooms = {
 
   /* ---------------- wrapped: the fight ---------------- */
 
+  /* The bell, once something has decided it may ring. Called by ChainRoom
+     when the contract has produced a seed, and by beginFight itself when
+     there is no chain to wait for. Bypasses the gate below - that is the
+     whole point of it being a separate door. */
+  startUngated(p1, p2, seed) {
+    this._ungated = true
+    try {
+      UI.beginFight(p1, p2, seed)
+    } finally {
+      this._ungated = false
+    }
+  },
+
   beginFight(p1, p2, seed) {
     const online = this.choice === 'online' && Net.online
+
+    /* THE GATE. An online room with a chain does not start on a timer: the
+       server opens a market and the fight waits until a backer is on each
+       side (js/chain-room.js). Everything below this is what happens once
+       that has been satisfied, or when there is no chain to satisfy.
+
+       `seed === undefined` distinguishes the first bell from a rematch,
+       which carries its own seed and has its own market. */
+    if (online && !this._ungated && seed === undefined &&
+        typeof ChainRoom !== 'undefined' && ChainRoom.enabled()) {
+      this._feed((f) => f.setPhase('ready'))
+      ChainRoom.begin(p1, p2)
+      return
+    }
 
     if (online) {
       if (seed === undefined) {
@@ -709,6 +743,14 @@ const Rooms = {
     const hp2 = i.hp2 !== undefined ? i.hp2 : enemy.health
     const mine = Net.resultHash(who, game.frame, hp1, hp2)
     Net.sendResult(mine)
+
+    /* Tell the server what this cabinet saw. It settles on the fight it ran
+       itself, but it will not settle at all if either browser reports a
+       different one - which is how "two machines agreed" survives the
+       server being the one holding the key. */
+    if (typeof ChainRoom !== 'undefined' && ChainRoom.matchId) {
+      ChainRoom.report(who, typeof game !== 'undefined' ? game.frame : 0, hp1, hp2)
+    }
 
     this._feed((f) => f.setResult(who, (i.label || how || '')))
 

@@ -534,6 +534,17 @@ const Net = {
       return
     }
 
+    /* Everything else the SERVER says, for the same reason and before the
+       same line. `from: 0` is the server talking - the market opening, the
+       pools moving, the bell - and none of it is evidence that the opponent
+       is on the other end of the room. Falling through to the presence
+       logic below would let a house table's own chatter, or this room's
+       market updates, tell a host sitting alone that their guest arrived. */
+    if (m.from === 0) {
+      if (this.onServerEvent) this.onServerEvent(m)
+      return
+    }
+
     this.peerSeen = Date.now()
     /* Anything at all from the other side means the seat is filled. This is
        what lets a host that refreshed and re-opened its own code notice the
